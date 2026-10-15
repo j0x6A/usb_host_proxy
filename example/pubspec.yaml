@@ -1,0 +1,14 @@
+name: usb_host_proxy_example
+description: Minimal Android app referencing usb_host_proxy API declarations without performing USB operations.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: '>=3.13.5 <4.0.0'
+  flutter: '>=3.47.7'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  usb_host_proxy:
+    path: ../

@@ -1,0 +1,30 @@
+# Dart and Flutter generated files.
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+coverage/
+
+# Library dependency resolution is owned by consuming applications.
+/pubspec.lock
+
+# Local editor configuration.
+.idea/
+.vscode/
+*.iml
+
+# Android local configuration and build caches.
+**/android/.gradle/
+**/android/.kotlin/
+**/android/captures/
+**/android/local.properties
+**/android/key.properties
+*.jks
+*.keystore
+
+# Operating system files.
+.DS_Store
+Thumbs.db
