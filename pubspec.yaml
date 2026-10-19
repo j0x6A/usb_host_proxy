@@ -1,6 +1,6 @@
 name: usb_host_proxy
 description: API declarations for Android USB Host and Windows USB pipe extensions. No platform implementation yet.
-version: 0.1.0
+version: 0.2.0
 publish_to: none
 
 environment:

@@ -5,7 +5,7 @@ Dart declarations for Android's `android.hardware.usb` host API, excluding
 
 ## Status
 
-Version 0.1.0 is an unreleased API skeleton. Android and Windows backends are not
+Version 0.2.0 is an unreleased API skeleton. Android and Windows backends are not
 implemented or registered.
 
 - `UsbDevice`, `UsbConfiguration`, `UsbInterface`, `UsbEndpoint`, and

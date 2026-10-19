@@ -1,4 +1,6 @@
-## 0.1.0 (unreleased)
+## 0.2.0 (unreleased)
+
+## 0.1.0
 
 - Declare the Android USB Host API in Dart, excluding `UsbAccessory` and
   `Parcelable` serialization.
