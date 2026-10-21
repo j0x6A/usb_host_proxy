@@ -8,6 +8,9 @@
 build/
 coverage/
 
+# Flutter generates plugin registration for application runners.
+GeneratedPluginRegistrant.java
+
 # Library dependency resolution is owned by consuming applications.
 /pubspec.lock
 

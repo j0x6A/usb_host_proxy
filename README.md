@@ -5,8 +5,19 @@ Dart declarations for Android's `android.hardware.usb` host API, excluding
 
 ## Status
 
-Version 0.2.0 is an unreleased API skeleton. Android and Windows backends are not
-implemented or registered.
+Version 0.2.0 is an unreleased project in development.
+
+| Area | Current state |
+| --- | --- |
+| Public Dart API | Declarations and placeholders |
+| Android registration | Plugin skeleton registered in pubspec.yaml |
+| Android USB backend | Planned |
+| JNI | Runtime dependency declared |
+| JNIgen | Development dependency declared; generation configuration comes with bindings |
+| FFI | No native build or bindings configured yet |
+| Windows | API extensions declared; backend and platform registration planned |
+
+Missing bindings and USB implementations are intentional at this stage.
 
 - `UsbDevice`, `UsbConfiguration`, `UsbInterface`, `UsbEndpoint`, and
   `UsbDeviceConnection` expose abstract methods without implementations.
@@ -84,6 +95,18 @@ Run these commands manually when dependency resolution or analysis is needed:
 flutter pub get
 flutter analyze
 ```
+
+`jni` supplies runtime Java interop; `jnigen` generates bindings during development.
+`dart:ffi` is part of the Dart SDK. A direct dependency on `package:ffi` should
+be added when this package starts importing its allocation or conversion helpers.
+
+Keep Flutter `.metadata` files in version control: they describe project type
+and migration history. Generated registration, build outputs, local SDK paths,
+and editor files are ignored. The library lockfile is ignored; the example
+lockfile records application dependency resolution. The example version is
+currently aligned with the package version by convention, not automatically.
+Existing template tests still refer to the template API and need adaptation
+when test code is brought into scope.
 
 ## Example APK
 

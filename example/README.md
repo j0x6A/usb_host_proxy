@@ -1,6 +1,13 @@
 # usb_host_proxy_example
 
-Demonstrates how to use the usb_host_proxy plugin.
+Minimal Android compilation example for the public usb_host_proxy declarations.
+It displays the API class names; USB operations and JNI bindings are added later.
+
+From this directory, run `flutter pub get` and `flutter build apk --debug`.
+The application ID is `dev.jarekxxxxx.usb_host_proxy`.
+The example version currently follows the package version by convention.
+
+The generated template tests have not yet been adapted to this example.
 
 ## Getting Started
 
