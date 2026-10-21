@@ -13,7 +13,8 @@
 - Add Android lifecycle/concurrency, attachment identity and permission tests
   across API 24, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
-- Include a minimal compilation example with its own namespace and widget test.
+- Provide a launcher-started USB Host diagnostic example with its own namespace
+  and fake-backed widget tests, without data transfers or USB launch filters.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing

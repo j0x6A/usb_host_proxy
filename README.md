@@ -50,7 +50,7 @@ the original framework object directly.
 | `lib/src/android/bindings.g.dart`, `tool/jnigen.dart` | Generated JNI signatures and the explicit regeneration entry point; no hand-written backend policy. |
 | `android/src/main/java/.../UsbHostProxy.java` | Attachment identities, permissions, live-device registry, native connection ownership and ordered work. |
 | `android/src/main/java/.../UsbHostProxyPlugin.java` | Engine/Activity lifecycle and forwarding Activity intents; not USB descriptor or transport logic. |
-| `android/src/test/java`, `example/` | Mock-backed backend/lifecycle tests and a UI-only compilation example. |
+| `android/src/test/java`, `example/` | Mock-backed backend/lifecycle tests and a manual USB Host diagnostic app with fake-backed widget tests. |
 
 Within `UsbHostProxy`, `Session` is the engine owner, `Device` represents one
 observed attachment and `Connection` owns one open native connection. `Permission`
@@ -141,7 +141,7 @@ For a deliberately broader device family, Android also supports `class`,
 `subclass` and `protocol` criteria. Do not use an attribute-free `usb-device`
 entry: it matches all devices. See the [Android USB Host guide](https://developer.android.com/develop/connectivity/usb/host)
 and [Activity launch modes](https://developer.android.com/guide/topics/manifest/activity-element#lmode).
-Neither the plugin manifest nor the compilation example installs a launch filter.
+Neither the plugin manifest nor the diagnostic example installs a launch filter.
 
 The plugin uses Flutter `ActivityAware` and the binding's new-intent listener;
 no custom MainActivity override is required with the standard Flutter embedding.
@@ -189,11 +189,12 @@ detach using a mocked Flutter engine, without starting the Flutter runtime. It
 also checks initial/new Activity intents, both Intent/broadcast delivery orders,
 invalid payloads, stale intents/listeners and Activity configuration changes.
 
-The widget test in `example/test` checks the compilation message and displayed
-API names only. It does not exercise the Android backend. There is currently no
-automated Dart-to-JNI integration test or physical-device test; Java tests do
+Widget tests in `example/test` exercise the diagnostic UI using a fake manager,
+including cleanup and late results. They do not execute JNI. There is currently
+no automated Dart-to-JNI integration test or physical-device test; Java tests do
 not verify JNI reference ownership, Dart error mapping or real Android USB
-behavior. The [example](example/README.md) performs no USB operations.
+behavior. The [example](example/README.md) supports manual management checks on
+Android hardware without transfers, configuration changes or USB launch filters.
 
 On-device verification remains necessary for JNI descriptors/list keys and
 callbacks, permission grant/refusal, detach during pending work, same-name

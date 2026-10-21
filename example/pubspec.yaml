@@ -1,5 +1,5 @@
 name: usb_host_proxy_example
-description: Minimal Android app displaying usb_host_proxy API names without USB operations.
+description: Manual Android USB Host diagnostics using the public usb_host_proxy API, without data transfers.
 publish_to: none
 version: 0.2.0
 
@@ -17,3 +17,6 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
