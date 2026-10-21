@@ -10,7 +10,7 @@ public final class UsbHostProxyPlugin
     @Override
     public void onAttachedToEngine(FlutterPluginBinding binding) {
         this.binding = binding;
-        UsbHostBridge.attach(binding.getApplicationContext(), binding.getFlutterEngine().getEngineId());
+        UsbHostProxy.attach(binding.getApplicationContext(), binding.getFlutterEngine().getEngineId());
         binding.getFlutterEngine().addEngineLifecycleListener(this);
     }
 
@@ -18,7 +18,7 @@ public final class UsbHostProxyPlugin
     public void onPreEngineRestart() {
         FlutterPluginBinding currentBinding = binding;
         if (currentBinding != null) {
-            UsbHostBridge.attach(
+            UsbHostProxy.attach(
                     currentBinding.getApplicationContext(),
                     currentBinding.getFlutterEngine().getEngineId());
         }
@@ -28,14 +28,14 @@ public final class UsbHostProxyPlugin
     public void onEngineWillDestroy() {
         FlutterPluginBinding currentBinding = binding;
         if (currentBinding != null) {
-            UsbHostBridge.detach(currentBinding.getFlutterEngine().getEngineId());
+            UsbHostProxy.detach(currentBinding.getFlutterEngine().getEngineId());
         }
     }
 
     @Override
     public void onDetachedFromEngine(FlutterPluginBinding binding) {
         binding.getFlutterEngine().removeEngineLifecycleListener(this);
-        UsbHostBridge.detach(binding.getFlutterEngine().getEngineId());
+        UsbHostProxy.detach(binding.getFlutterEngine().getEngineId());
         this.binding = null;
     }
 }

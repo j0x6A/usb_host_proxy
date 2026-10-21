@@ -65,6 +65,15 @@ running is an event; USB-triggered app launch is initial state obtained through
 intent filter and device-filter metadata. Detached descriptor objects remain
 readable, but permission/serial reads can require a live authorized attachment.
 
+Each observed attachment has a private `deviceName-UUID` identity within the
+engine session. Enumerations retain it; observed absence retires it and a later
+presence receives a new UUID. Android device names and `getDeviceList()` keys
+remain unchanged. Duplicate events do not create extra attachments; a detach
+notification cannot retire a currently present name. Enumeration also reports
+detach when it detects absence. A complete unplug/replug cycle under the same
+name cannot be distinguished if Android provides no correlatable information
+and no absence is observed; UUIDs do not remove that limitation.
+
 ## Bindings and tests
 
 `tool/jnigen.dart` generates the committed private bindings from Android SDK
@@ -76,12 +85,25 @@ dart run tool/jnigen.dart /path/to/Android/Sdk
 
 The SDK path can instead come from `ANDROID_SDK_ROOT`. `JNIGEN_SUMMARIZER`
 optionally selects a prebuilt ApiSummarizer command. Do not edit generated
-bindings by hand. `jni` supplies the runtime; `jnigen` is a development tool.
+binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool.
 
-Android unit tests are in `android/src/test/java`; the example widget test is in
-`example/test`. Physical hardware checks should cover permission grant/refusal,
-detach during pending work, same-port reattachment, multiple devices and
-USB-triggered launch. The [example](example/README.md) only displays API names.
+Android unit test sources in `android/src/test/java` target API 24, 31, 33 and 35
+to cover the permission PendingIntent and receiver API branches. They use
+Robolectric and mocked USB objects; they cover attachment identity, duplicate
+events, permission replies, ownership, connection queues and cleanup.
+`UsbHostProxyPluginTest` checks engine attach, restart, destruction and plugin
+detach using a mocked Flutter engine, without starting the Flutter runtime.
+
+The widget test in `example/test` checks the compilation message and displayed
+API names only. It does not exercise the Android backend. There is currently no
+automated Dart-to-JNI integration test or physical-device test; Java tests do
+not verify JNI reference ownership, Dart error mapping or real Android USB
+behavior. The [example](example/README.md) performs no USB operations.
+
+On-device verification remains necessary for JNI descriptors/list keys and
+callbacks, permission grant/refusal, detach during pending work, same-name
+reattachment, independent devices, engine restart and USB-triggered launch.
+These are verification scenarios, not claims of completed hardware testing.
 
 ## References
 

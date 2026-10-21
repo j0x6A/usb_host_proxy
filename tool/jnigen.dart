@@ -21,7 +21,7 @@ Future<void> main(List<String> args) async {
         'android.hardware.usb.UsbEndpoint',
         'java.lang.IllegalStateException',
         'java.lang.IllegalArgumentException',
-        'dev.jarekxxxxx.usb_host_proxy.UsbHostBridge',
+        'dev.jarekxxxxx.usb_host_proxy.UsbHostProxy',
       ],
       sourcePath: [root.resolve('android/src/main/java')],
       androidSdk: AndroidSdk(versions: [36], sdkRoot: Directory(sdk).uri),

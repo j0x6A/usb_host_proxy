@@ -5,7 +5,13 @@
   using JNI/JNIgen, without data transport.
 - Keep blocking connection operations on independent per-connection queues;
   close connections on detach and engine shutdown/restart.
-- Add Android lifecycle/concurrency unit tests.
+- Identify observed attachments privately by `deviceName-UUID`, retaining the
+  UUID across enumerations without changing Android names or public list keys.
+- Deduplicate attach/detach notifications, bind permission replies to attachment
+  instances and report detach when enumeration detects absence. Unobserved
+  same-name unplug/replug cycles cannot be distinguished.
+- Add Android lifecycle/concurrency, attachment identity and permission tests
+  across API 24, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
 - Include a minimal compilation example with its own namespace and widget test.
 

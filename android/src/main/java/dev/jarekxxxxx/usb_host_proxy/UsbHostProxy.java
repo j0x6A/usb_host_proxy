@@ -23,8 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** Lifecycle and asynchronous Android integration, not a copy of the USB model. */
-public final class UsbHostBridge {
-    private UsbHostBridge() {}
+public final class UsbHostProxy {
+    private UsbHostProxy() {}
 
     private static final Map<Long, Session> sessions = new HashMap<>();
 
@@ -60,15 +60,18 @@ public final class UsbHostBridge {
         void disposed();
     }
 
-    /** A reference to one physical attachment, invalidated even if its name is reused. */
+    /** One observed attachment. A reused Android name alone cannot prove reattachment. */
     public static final class Device {
         public final UsbDevice usbDevice;
         private final Session owner;
+        private final String internalId;
         private boolean attached = true; // Session monitor owns this lifecycle flag.
+        private boolean attachNotified = false;
 
         private Device(Session owner, UsbDevice device) {
             this.owner = owner;
             this.usbDevice = device;
+            this.internalId = device.getDeviceName() + "-" + UUID.randomUUID();
         }
 
         public void serial(Completion completion) {
@@ -108,13 +111,16 @@ public final class UsbHostBridge {
             @Override public void onReceive(Context context, Intent intent) {
                 if (!permissionAction.equals(intent.getAction())) return;
                 synchronized (Session.this) {
-                    Permission pending = permissions.remove(intent.getIntExtra("request", -1));
-                    if (pending == null || !active) return;
+                    int request = intent.getIntExtra("request", -1);
+                    Permission pending = permissions.get(request);
+                    if (pending == null || !active
+                        || !pending.device.internalId.equals(intent.getStringExtra("deviceInstance"))) return;
+                    permissions.remove(request);
                     try {
                         UsbDevice reply = extraDevice(intent);
                         boolean granted = reply != null
                             && reply.getDeviceName().equals(pending.device.usbDevice.getDeviceName())
-                            && pending.device.attached
+                            && isCurrentDevice(pending.device)
                             && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             && manager.hasPermission(pending.device.usbDevice);
                         pending.finish(granted, null);
@@ -161,15 +167,23 @@ public final class UsbHostBridge {
         private void checkDevice(Device device) {
             checkActive();
             if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
-            if (!device.attached) throw new IllegalStateException("USB device is detached");
+            if (!isCurrentDevice(device)) throw new IllegalStateException("USB device attachment is no longer current");
+        }
+
+        // Called only while holding the session monitor, like the name index itself.
+        private boolean isCurrentDevice(Device device) {
+            Device current = devices.get(device.usbDevice.getDeviceName());
+            return device.owner == this && device.attached && current != null
+                && current.internalId.equals(device.internalId);
         }
 
         public synchronized Device[] deviceList() {
             checkActive();
             Map<String, UsbDevice> found = manager.getDeviceList();
-            // A missed detach must not leave an open connection usable forever.
+            // Only an observed absence ends this attachment. Changed Java object
+            // identity or descriptor values are not evidence of reattachment.
             for (Device old : new ArrayList<>(devices.values())) {
-                if (!found.containsKey(old.usbDevice.getDeviceName())) retire(old);
+                if (!found.containsKey(old.usbDevice.getDeviceName())) retire(old, true);
             }
             ArrayList<Device> result = new ArrayList<>();
             for (Map.Entry<String, UsbDevice> entry : found.entrySet()) {
@@ -186,7 +200,7 @@ public final class UsbHostBridge {
         public synchronized boolean hasPermission(Device device) {
             checkActive();
             if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
-            return device.attached && manager.hasPermission(device.usbDevice);
+            return isCurrentDevice(device) && manager.hasPermission(device.usbDevice);
         }
 
         public synchronized void requestPermission(Device device, Completion completion) {
@@ -194,7 +208,7 @@ public final class UsbHostBridge {
             try {
                 checkActive();
                 if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
-                if (!device.attached) { call.finish(false, null); return; }
+                if (!isCurrentDevice(device)) { call.finish(false, null); return; }
                 if (manager.hasPermission(device.usbDevice)) { call.finish(true, null); return; }
                 for (Permission permission : permissions.values()) {
                     if (permission.device == device) { permission.waiters.add(call); return; }
@@ -202,6 +216,7 @@ public final class UsbHostBridge {
                 int request = ++nextPermission;
                 Intent intent = new Intent(permissionAction).setPackage(context.getPackageName());
                 intent.putExtra("request", request);
+                intent.putExtra("deviceInstance", device.internalId);
                 int flags = PendingIntent.FLAG_CANCEL_CURRENT;
                 if (Build.VERSION.SDK_INT >= 31) flags |= PendingIntent.FLAG_MUTABLE;
                 PendingIntent pendingIntent = PendingIntent.getBroadcast(context, request, intent, flags);
@@ -209,13 +224,13 @@ public final class UsbHostBridge {
                 permissions.put(request, permission);
                 workers.execute(() -> {
                     synchronized (Session.this) {
-                        if (!active || !device.attached || !permissions.containsKey(request)) return;
+                        if (!active || !isCurrentDevice(device) || permissions.get(request) != permission) return;
                     }
                     try {
                         manager.requestPermission(device.usbDevice, pendingIntent);
                     } catch (Throwable error) {
                         synchronized (Session.this) {
-                            if (permissions.remove(request) == permission) permission.finish(null, error);
+                            if (permissions.remove(request, permission)) permission.finish(null, error);
                         }
                     }
                 });
@@ -230,7 +245,7 @@ public final class UsbHostBridge {
                 UsbDeviceConnection opened = manager.openDevice(device.usbDevice);
                 if (opened == null) return null;
                 synchronized (this) {
-                    if (!active || !device.attached) {
+                    if (!active || !isCurrentDevice(device)) {
                         opened.close();
                         throw new IllegalStateException("USB device or session ended while opening");
                     }
@@ -252,12 +267,22 @@ public final class UsbHostBridge {
 
         private synchronized void onAttached(UsbDevice usbDevice) {
             if (!active) return;
-            // Enumeration can win the race with delivery of this same attach broadcast.
-            Device device = devices.get(usbDevice.getDeviceName());
-            if (device == null) {
-                device = new Device(this, usbDevice);
-                devices.put(usbDevice.getDeviceName(), device);
+            String name = usbDevice.getDeviceName();
+            // A queued attach may already be obsolete. Use the live framework object,
+            // not the event payload or a descriptor fingerprint, for a new wrapper.
+            UsbDevice present = manager.getDeviceList().get(name);
+            Device device = devices.get(name);
+            if (present == null) {
+                if (device != null) retire(device, true);
+                return;
             }
+            if (device == null) {
+                device = new Device(this, present);
+                devices.put(name, device);
+            }
+            // Enumeration and duplicate attach notifications share the same UUID.
+            if (device.attachNotified) return;
+            device.attachNotified = true;
             if (events != null) {
                 try { events.attached(device); }
                 catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
@@ -266,18 +291,18 @@ public final class UsbHostBridge {
 
         private synchronized void onDetached(UsbDevice usbDevice) {
             if (!active) return;
-            Device device = devices.get(usbDevice.getDeviceName());
-            if (device == null) device = new Device(this, usbDevice);
-            retire(device);
-            if (events != null) {
-                try { events.detached(device); }
-                catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
-            }
+            String name = usbDevice.getDeviceName();
+            // If this name is live, the notification may refer to an older attachment.
+            // Without an Android attachment token we cannot assign that edge safely.
+            if (manager.getDeviceList().containsKey(name)) return;
+            Device device = devices.get(name);
+            if (device != null) retire(device, true);
         }
 
-        private void retire(Device device) {
+        private void retire(Device device, boolean notify) {
+            if (!device.attached) return;
             device.attached = false;
-            devices.remove(device.usbDevice.getDeviceName());
+            devices.remove(device.usbDevice.getDeviceName(), device);
             for (Map.Entry<Integer, Permission> entry : new ArrayList<>(permissions.entrySet())) {
                 if (entry.getValue().device == device) {
                     permissions.remove(entry.getKey());
@@ -286,6 +311,10 @@ public final class UsbHostBridge {
             }
             for (Connection connection : new ArrayList<>(connections)) {
                 if (connection.device == device) connection.close(null);
+            }
+            if (notify && events != null) {
+                try { events.detached(device); }
+                catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
             }
         }
 
@@ -296,7 +325,7 @@ public final class UsbHostBridge {
             context.unregisterReceiver(permissionReceiver);
             for (Permission permission : permissions.values()) permission.finish(null, new IllegalStateException("USB session has ended"));
             permissions.clear();
-            for (Device device : new ArrayList<>(devices.values())) retire(device);
+            for (Device device : new ArrayList<>(devices.values())) retire(device, false);
             for (Call call : new ArrayList<>(calls)) call.finish(null, new IllegalStateException("USB session has ended"));
             Events listener = events;
             events = null;

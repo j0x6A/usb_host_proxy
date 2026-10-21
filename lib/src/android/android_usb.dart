@@ -36,12 +36,12 @@ T _java<T>(T Function() operation) {
 String? _string(JString? value) => value?.toDartString(releaseOriginal: true);
 
 Future<T> _call<T>(
-  void Function(j.UsbHostBridge$Completion) start,
+  void Function(j.UsbHostProxy$Completion) start,
   T Function(JObject?) decode,
 ) {
   final result = Completer<T>();
-  final callback = j.UsbHostBridge$Completion.implement(
-    j.$UsbHostBridge$Completion(
+  final callback = j.UsbHostProxy$Completion.implement(
+    j.$UsbHostProxy$Completion(
       success$async: true,
       failure$async: true,
       success: (value) {
@@ -57,7 +57,7 @@ Future<T> _call<T>(
         try {
           // Throw on the JNI thread so JNIgen preserves the original Java
           // exception type, message and stack trace, just like direct calls.
-          _java(() => j.UsbHostBridge.rethrowError(error));
+          _java(() => j.UsbHostProxy.rethrowError(error));
           if (!result.isCompleted) {
             result.completeError(StateError('Missing Android error'));
           }
@@ -90,7 +90,7 @@ String? _resultString(JObject? value) =>
 final class AndroidUsb {
   static final AndroidUsb instance = AndroidUsb._();
 
-  j.UsbHostBridge$Session? _reference;
+  j.UsbHostProxy$Session? _reference;
   final _attached = StreamController<UsbDevice>.broadcast();
   final _detached = StreamController<UsbDevice>.broadcast();
 
@@ -100,9 +100,9 @@ final class AndroidUsb {
     }
     final engineId = PlatformDispatcher.instance.engineId;
     if (engineId == null) throw StateError('No Flutter engine is attached');
-    _reference = _java(() => j.UsbHostBridge.session(engineId))!;
-    final listener = j.UsbHostBridge$Events.implement(
-      j.$UsbHostBridge$Events(
+    _reference = _java(() => j.UsbHostProxy.session(engineId))!;
+    final listener = j.UsbHostProxy$Events.implement(
+      j.$UsbHostProxy$Events(
         attached$async: true,
         detached$async: true,
         disposed$async: true,
@@ -127,12 +127,12 @@ final class AndroidUsb {
     }
   }
 
-  j.UsbHostBridge$Session get _session =>
+  j.UsbHostProxy$Session get _session =>
       _reference ?? (throw StateError('USB session has ended'));
 
   void _event(
     StreamController<UsbDevice> stream,
-    j.UsbHostBridge$Device? device,
+    j.UsbHostProxy$Device? device,
   ) {
     if (device == null) return;
     if (!stream.hasListener || stream.isClosed) {
@@ -193,7 +193,7 @@ final class AndroidUsb {
     (callback) => _session.open(_device(device).handle, callback),
     (value) => value == null
         ? null
-        : _AndroidConnection(value.as(j.UsbHostBridge$Connection.type)),
+        : _AndroidConnection(value.as(j.UsbHostProxy$Connection.type)),
   );
 
   static int deviceId(String name) => _java(() {
@@ -210,7 +210,7 @@ final class AndroidUsb {
 }
 
 final class _AndroidDevice implements UsbDevice {
-  final j.UsbHostBridge$Device handle;
+  final j.UsbHostProxy$Device handle;
   final j.UsbDevice native;
 
   _AndroidDevice(this.handle) : native = _java(() => handle.usbDevice)!;
@@ -312,7 +312,7 @@ final class _AndroidEndpoint implements UsbEndpoint {
 }
 
 final class _AndroidConnection implements UsbDeviceConnection {
-  final j.UsbHostBridge$Connection native;
+  final j.UsbHostProxy$Connection native;
   _AndroidConnection(this.native);
 
   j.UsbInterface _interface(UsbInterface intf) {
