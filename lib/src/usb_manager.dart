@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'android/android_usb.dart';
 import 'usb_device.dart';
 import 'usb_device_connection.dart';
 
@@ -8,7 +10,8 @@ import 'usb_device_connection.dart';
 
 /// USB host discovery, permissions, connections, and device lifecycle events.
 ///
-/// This class currently contains placeholders only; no USB operations occur.
+/// Android uses JNI references to the original framework objects. Other
+/// platforms retain their unimplemented placeholder behavior.
 class UsbManager {
   /// Creates a manager without enumerating or opening devices.
   UsbManager();
@@ -29,39 +32,51 @@ class UsbManager {
 
   /// Stream of newly attached devices.
   ///
-  /// NOT IMPLEMENTED YET: returns an empty stream that immediately completes.
-  Stream<UsbDevice> get deviceAttached => const Stream<UsbDevice>.empty();
+  /// Broadcast stream without replay. USB attachment that starts the app is
+  /// initial state available through [getDeviceList], not a replayed event.
+  Stream<UsbDevice> get deviceAttached => Platform.isAndroid
+      ? AndroidUsb.instance.deviceAttached
+      : const Stream<UsbDevice>.empty();
 
   /// Stream of detached device snapshots.
   ///
-  /// NOT IMPLEMENTED YET: returns an empty stream that immediately completes.
-  Stream<UsbDevice> get deviceDetached => const Stream<UsbDevice>.empty();
+  /// Connections are invalidated before notification. The native descriptor
+  /// objects remain readable; device operations require a current attachment.
+  Stream<UsbDevice> get deviceDetached => Platform.isAndroid
+      ? AndroidUsb.instance.deviceDetached
+      : const Stream<UsbDevice>.empty();
 
   /// Returns devices keyed by the name returned by [UsbDevice.getDeviceName].
   ///
-  /// NOT IMPLEMENTED YET: returns an empty map without enumerating devices.
+  /// Does not open devices or request permission.
   Future<Map<String, UsbDevice>> getDeviceList() async {
+    if (Platform.isAndroid) return AndroidUsb.instance.getDeviceList();
     return <String, UsbDevice>{};
   }
 
   /// Whether the application currently has permission to access [device].
   ///
-  /// NOT IMPLEMENTED YET: returns false without checking permissions.
   Future<bool> hasPermission(UsbDevice device) async {
+    if (Platform.isAndroid) return AndroidUsb.instance.hasPermission(device);
     return false;
   }
 
   /// Requests access and waits for the permission decision.
   ///
-  /// NOT IMPLEMENTED YET: returns false without requesting permission.
+  /// Concurrent requests for the same attachment share a decision. Denial or
+  /// detachment returns false. Session termination completes with an error.
   Future<bool> requestPermission(UsbDevice device) async {
+    if (Platform.isAndroid) {
+      return AndroidUsb.instance.requestPermission(device);
+    }
     return false;
   }
 
   /// Opens [device], or returns null if it cannot be opened.
   ///
-  /// NOT IMPLEMENTED YET: returns null without opening the device.
+  /// Does not request permission implicitly. Android exceptions are propagated.
   Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
+    if (Platform.isAndroid) return AndroidUsb.instance.openDevice(device);
     return null;
   }
 }

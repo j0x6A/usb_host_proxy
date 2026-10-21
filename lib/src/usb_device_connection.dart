@@ -8,7 +8,9 @@ import 'usb_request.dart';
 
 /// A connection returned by `UsbManager.openDevice`.
 ///
-/// Platform operations are declarations without an implementation.
+/// Android implements management and information operations through JNI.
+/// Transport and Windows extensions are not implemented by the Android backend.
+/// Operations on a closed/detached Android connection fail with StateError.
 abstract class UsbDeviceConnection {
   // Android USB host API.
 
@@ -66,6 +68,9 @@ abstract class UsbDeviceConnection {
   Future<UsbRequest?> requestWait({int? timeout});
 
   /// Closes the connection.
+  ///
+  /// Android close is idempotent and waits for in-flight management operations.
+  /// Detaching the device or ending the engine session also closes it.
   Future<void> close();
 
   // Windows USB pipe extensions.

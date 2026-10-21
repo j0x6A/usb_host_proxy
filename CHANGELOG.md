@@ -1,5 +1,12 @@
 ## 0.2.0 (unreleased)
 
+- Implement Android USB Host enumeration, descriptor access, permissions,
+  connection management, interface/configuration selection and device events
+  using JNI/JNIgen, without data transport.
+- Keep blocking connection operations on independent per-connection queues;
+  close connections on detach and engine shutdown/restart.
+- Add Android lifecycle/concurrency unit tests.
+
 - Convert the package to an Android Flutter plugin with a registration skeleton.
 - Add JNI runtime and JNIgen development dependencies for planned Java interop.
 - Remove MethodChannel template code and its obsolete tests and dependencies.

@@ -1,5 +1,5 @@
 name: usb_host_proxy
-description: API declarations for Android USB Host and Windows USB pipe extensions. No platform implementation yet.
+description: Android USB Host management through JNI, with shared USB API declarations and planned Windows extensions. Data transport is not implemented.
 version: 0.2.0
 publish_to: none
 

@@ -1,12 +1,12 @@
 /// The shared USB host API for Android and Windows.
 ///
-/// API declarations and placeholders only. No platform backend is implemented.
-/// Concrete placeholders return default values or do nothing; each is marked
-/// NOT IMPLEMENTED YET. Abstract members have no implementation.
+/// Android management and device events use JNI. USB transport, UsbRequest and
+/// the Windows backend are not implemented. UsbRequest placeholders retain
+/// their documented behavior.
 ///
 /// Android USB Host classes and protocol constants are represented without
-/// UsbAccessory. Native operations return futures so callers can await backend
-/// replies without blocking the Dart isolate. Device events use streams, and
+/// UsbAccessory. Potentially blocking operations execute outside the Dart
+/// isolate; descriptor getters directly read the original objects. Device events use streams, and
 /// requestPermission returns the decision instead of exposing PendingIntent.
 ///
 /// Java overloads share one Dart method with named optional arguments. Static
