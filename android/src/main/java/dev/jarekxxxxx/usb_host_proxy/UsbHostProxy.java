@@ -10,6 +10,7 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.os.BadParcelableException;
 import android.os.Build;
 import android.util.Log;
 import java.util.ArrayList;
@@ -22,22 +23,42 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Lifecycle and asynchronous Android integration, not a copy of the USB model. */
+/**
+ * Android backend exposed to Dart through JNIgen, without USB data transport.
+ *
+ * <p>Framework USB objects remain the source of descriptor data. This class adds
+ * attachment identity, engine ownership, permission callbacks and operation queues.
+ * The class monitor guards the engine registry; each Session guards its own state.
+ */
 public final class UsbHostProxy {
+    /** Static entry points only; Flutter creates sessions through the plugin. */
     private UsbHostProxy() {}
 
+    /** Engine ID to live session; accessed only under the class monitor. */
     private static final Map<Long, Session> sessions = new HashMap<>();
 
+    /** Replaces an engine's previous session, settling its work before registration. */
     static synchronized void attach(Context context, long engineId) {
         detach(engineId);
         sessions.put(engineId, new Session(context.getApplicationContext()));
     }
 
+    /** Ends the registered session, if any; repeated calls are harmless. */
     static synchronized void detach(long engineId) {
         Session session = sessions.remove(engineId);
         if (session != null) session.dispose();
     }
 
+    /**
+     * Routes Activity delivery under the registry lock; never revives a destroyed engine.
+     * Package-private Android integration entry point, not part of the JNIgen surface.
+     */
+    static synchronized boolean handleActivityIntent(long engineId, Intent intent, boolean initial) {
+        Session session = sessions.get(engineId);
+        return session != null && session.handleActivityIntent(intent, initial);
+    }
+
+    /** Returns an existing engine session; never creates one from a JNI call. */
     public static synchronized Session session(long engineId) {
         Session session = sessions.get(engineId);
         if (session == null) throw new IllegalStateException("USB engine is not attached");
@@ -45,35 +66,49 @@ public final class UsbHostProxy {
     }
 
     /** Rethrow on the calling JNI thread, preserving Android exception details. */
-    public static void rethrowError(Throwable error) throws Throwable { throw error; }
+    public static void rethrowError(Throwable error) throws Throwable {
+        throw error;
+    }
 
     /** Implemented by Dart as a nonblocking JNIgen listener. */
     public interface Completion {
+        /** Delivers an operation-specific boxed value, native object, or null. */
         void success(Object value);
+        /** Delivers the original failure for translation on the Dart side. */
         void failure(Throwable error);
     }
 
     /** Startup USB intents are initial state, not replayed attach events. */
     public interface Events {
+        /** Reports the current attachment once for an accepted attach notification. */
         void attached(Device device);
+        /** Reports a retired attachment after invalidation and scheduling close. */
         void detached(Device device);
+        /** Ends this session's event stream; does not represent physical detach. */
         void disposed();
     }
 
     /** One observed attachment. A reused Android name alone cannot prove reattachment. */
     public static final class Device {
+        /** Original descriptor object; retained even after this attachment is retired. */
         public final UsbDevice usbDevice;
+        /** Session that created this wrapper and owns its mutable lifecycle state. */
         private final Session owner;
+        /** Private Android name plus UUID, fixed for this observed attachment. */
         private final String internalId;
-        private boolean attached = true; // Session monitor owns this lifecycle flag.
+        /** Session-guarded flag; false after retirement and never becomes true again. */
+        private boolean attached = true;
+        /** Notification delivered, or consumed silently as initial Activity state; session-guarded. */
         private boolean attachNotified = false;
 
+        /** Creates an identity only when the session observes a device as present. */
         private Device(Session owner, UsbDevice device) {
             this.owner = owner;
             this.usbDevice = device;
             this.internalId = device.getDeviceName() + "-" + UUID.randomUUID();
         }
 
+        /** Reads the framework serial on a worker after checking attachment ownership. */
         public void serial(Completion completion) {
             owner.work(completion, () -> {
                 synchronized (owner) { owner.checkDevice(this); }
@@ -82,31 +117,51 @@ public final class UsbHostProxy {
         }
     }
 
+    /**
+     * Engine-scoped registry, receivers and pending work, shared by its Dart managers.
+     *
+     * <p>The session monitor guards devices, permissions, calls, connections and event
+     * delivery. Normal worker operations run outside it; publication and late-open
+     * cleanup reacquire it. Each connection's queue orders only that connection.
+     */
     public static final class Session {
+        /** Application context, so the session does not retain an Activity. */
         private final Context context;
+        /** Android service used for discovery, permission decisions and opening. */
         private final UsbManager manager;
+        /** Unique reply action for this session, not an attachment identifier. */
         private final String permissionAction;
+        /** Session-level work such as opening, device serial reads and permission submission. */
         private final ExecutorService workers = Executors.newCachedThreadPool();
+        /** Name index of current wrappers; the name is a locator, not lifetime identity. */
         private final Map<String, Device> devices = new HashMap<>();
+        /** Published connections, retained until their queued close finishes. */
         private final Set<Connection> connections = new HashSet<>();
+        /** Unsettled callbacks, including operations waiting in connection queues. */
         private final Set<Call> calls = new HashSet<>();
+        /** Request code to coalesced permission decision for one attachment. */
         private final Map<Integer, Permission> permissions = new HashMap<>();
+        /** Source of request codes used by this session's PendingIntents. */
         private int nextPermission = 0;
+        /** Becomes false before disposal invalidates resources and pending calls. */
         private boolean active = true;
+        /** Single nonblocking JNIgen listener; notifications have no replay buffer. */
         private Events events;
 
+        /** Routes runtime USB broadcasts to reconciliation against Android's live list. */
         private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 UsbDevice device = extraDevice(intent);
                 if (device == null) return;
                 if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
-                    onAttached(device);
+                    onAttached(device, true);
                 } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(intent.getAction())) {
                     onDetached(device);
                 }
             }
         };
 
+        /** Matches replies by request code and attachment UUID before consuming a waiter. */
         private final BroadcastReceiver permissionReceiver = new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
                 if (!permissionAction.equals(intent.getAction())) return;
@@ -129,6 +184,7 @@ public final class UsbHostProxy {
             }
         };
 
+        /** Registers both receivers; rolls back USB registration if permission setup fails. */
         private Session(Context context) {
             this.context = context;
             this.manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
@@ -154,29 +210,37 @@ public final class UsbHostProxy {
             }
         }
 
+        /** Installs the engine's sole Dart listener without replaying existing devices. */
         public synchronized void listen(Events listener) {
             checkActive();
             if (events != null) throw new IllegalStateException("USB supports one Dart isolate per engine");
             events = listener;
         }
 
+        /** Rejects access after disposal; caller holds the session monitor. */
         private void checkActive() {
             if (!active) throw new IllegalStateException("USB session has ended");
         }
 
+        /** Distinguishes foreign ownership from a stale attachment; requires the monitor. */
         private void checkDevice(Device device) {
             checkActive();
             if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
             if (!isCurrentDevice(device)) throw new IllegalStateException("USB device attachment is no longer current");
         }
 
-        // Called only while holding the session monitor, like the name index itself.
+        /** Checks owner, lifecycle flag and current UUID under the session monitor. */
         private boolean isCurrentDevice(Device device) {
             Device current = devices.get(device.usbDevice.getDeviceName());
             return device.owner == this && device.attached && current != null
                 && current.internalId.equals(device.internalId);
         }
 
+        /**
+         * Reconciles the live framework list and returns canonical attachment wrappers.
+         * Missing names are retired and may emit detach; presence alone emits no attach.
+         * This direct JNI entry point enumerates synchronously on the calling thread.
+         */
         public synchronized Device[] deviceList() {
             checkActive();
             Map<String, UsbDevice> found = manager.getDeviceList();
@@ -197,12 +261,18 @@ public final class UsbHostProxy {
             return result.toArray(new Device[0]);
         }
 
+        /** Checks Android synchronously; a retired attachment returns false, a foreign one fails. */
         public synchronized boolean hasPermission(Device device) {
             checkActive();
             if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
             return isCurrentDevice(device) && manager.hasPermission(device.usbDevice);
         }
 
+        /**
+         * Shares one pending Android permission decision per attachment, without a timeout.
+         * Refusal or retirement completes false; session disposal completes with an error.
+         * Only submission to Android is dispatched to a worker; no worker waits for the reply.
+         */
         public synchronized void requestPermission(Device device, Completion completion) {
             Call call = new Call(this, completion);
             try {
@@ -239,6 +309,11 @@ public final class UsbHostProxy {
             }
         }
 
+        /**
+         * Opens on a session worker without implicitly requesting permission.
+         * Native null is preserved. A connection opened across retirement/disposal is
+         * closed here instead of being published to Dart under an obsolete identity.
+         */
         public void open(Device device, Completion completion) {
             work(completion, () -> {
                 synchronized (this) { checkDevice(device); }
@@ -256,6 +331,7 @@ public final class UsbHostProxy {
             });
         }
 
+        /** Tracks a callback and dispatches session work; Call arbitrates late completion. */
         private synchronized void work(Completion completion, Callable<Object> operation) {
             Call call = new Call(this, completion);
             if (!active) { call.finish(null, new IllegalStateException("USB session has ended")); return; }
@@ -265,7 +341,32 @@ public final class UsbHostProxy {
             });
         }
 
-        private synchronized void onAttached(UsbDevice usbDevice) {
+        /**
+         * Accepts only a USB attach action with a readable UsbDevice payload.
+         * Initial Activity state consumes attach silently; later deliveries may notify.
+         * True means the payload was recognized, even if live reconciliation finds it stale.
+         * Neither form opens a device, requests permission nor trusts the payload as live state.
+         */
+        private synchronized boolean handleActivityIntent(Intent intent, boolean initial) {
+            if (!active || intent == null
+                || !UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return false;
+            UsbDevice device;
+            try {
+                device = extraDevice(intent);
+            } catch (BadParcelableException | ClassCastException error) {
+                return false;
+            }
+            if (device == null) return false;
+            onAttached(device, !initial);
+            return true;
+        }
+
+        /**
+         * Reconciles a name hint using the same wrapper and flag for Activity and broadcast paths.
+         * notify controls attach delivery only: observed absence still retires a known device.
+         * Silent initial delivery consumes the notification without changing the wrapper's UUID.
+         */
+        private synchronized void onAttached(UsbDevice usbDevice, boolean notify) {
             if (!active) return;
             String name = usbDevice.getDeviceName();
             // A queued attach may already be obsolete. Use the live framework object,
@@ -283,12 +384,13 @@ public final class UsbHostProxy {
             // Enumeration and duplicate attach notifications share the same UUID.
             if (device.attachNotified) return;
             device.attachNotified = true;
-            if (events != null) {
+            if (notify && events != null) {
                 try { events.attached(device); }
                 catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
             }
         }
 
+        /** Retires only a known, currently absent name; ignores unknown or ambiguous edges. */
         private synchronized void onDetached(UsbDevice usbDevice) {
             if (!active) return;
             String name = usbDevice.getDeviceName();
@@ -299,6 +401,11 @@ public final class UsbHostProxy {
             if (device != null) retire(device, true);
         }
 
+        /**
+         * Invalidates one wrapper, resolves its permissions false and queues its closes.
+         * Requires the session monitor. notify is false during engine disposal, which
+         * must not manufacture physical detach events. Repeated retirement is harmless.
+         */
         private void retire(Device device, boolean notify) {
             if (!device.attached) return;
             device.attached = false;
@@ -318,6 +425,10 @@ public final class UsbHostProxy {
             }
         }
 
+        /**
+         * Ends the session, unregisters receivers and settles pending calls with errors.
+         * Queued native closes may finish later; shutdown does not join worker threads.
+         */
         private synchronized void dispose() {
             if (!active) return;
             active = false;
@@ -337,22 +448,29 @@ public final class UsbHostProxy {
         }
     }
 
+    /** Extracts the optional USB payload using the Parcelable API for the runtime SDK. */
     private static UsbDevice extraDevice(Intent intent) {
         if (Build.VERSION.SDK_INT >= 33) return intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice.class);
         return intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
     }
 
+    /** One Android permission request shared by callers of the exact same Device wrapper. */
     private static final class Permission {
+        /** Attachment to which the decision belongs, not just its reusable name. */
         final Device device;
+        /** Android reply token, cancelled when the decision is settled. */
         final PendingIntent intent;
+        /** Callbacks waiting for this decision; accessed under the owning session. */
         final ArrayList<Call> waiters = new ArrayList<>();
 
+        /** Starts a decision with its first waiting call. */
         Permission(Device device, PendingIntent intent, Call first) {
             this.device = device;
             this.intent = intent;
             waiters.add(first);
         }
 
+        /** Cancels the reply token and settles all waiters under the session monitor. */
         void finish(Object value, Throwable error) {
             intent.cancel();
             for (Call call : waiters) call.finish(value, error);
@@ -360,16 +478,21 @@ public final class UsbHostProxy {
         }
     }
 
+    /** Exactly-once callback slot shared by normal completion and session cleanup. */
     private static final class Call {
+        /** Owns the pending-call set and the monitor used to arbitrate completion. */
         final Session owner;
+        /** Cleared before delivery so late workers cannot complete the call twice. */
         Completion completion;
 
+        /** Registers a pending callback; caller holds the owner's monitor. */
         Call(Session owner, Completion completion) {
             this.owner = owner;
             this.completion = completion;
             owner.calls.add(this);
         }
 
+        /** Removes and delivers the callback once; errors from a dead listener are logged. */
         void finish(Object value, Throwable error) {
             synchronized (owner) {
                 if (completion == null) return;
@@ -386,35 +509,64 @@ public final class UsbHostProxy {
         }
     }
 
-    /** Owns exactly one original connection and its own operation queue. */
+    /**
+     * Owns one framework connection, bound permanently to one attachment wrapper.
+     *
+     * <p>Lifecycle changes acquire the session monitor before readLock. Synchronous
+     * reads use readLock alone; native close also uses it. Accepted management work
+     * and close are serialized on this connection's queue, never on a global queue.
+     */
     public static final class Connection {
+        /** Session responsible for tracking this connection and its callbacks. */
         private final Session owner;
+        /** Exact attachment used at open time; never rebound after name reuse. */
         private final Device device;
+        /** FIFO executor for this connection's management operations and final close. */
         private final ExecutorService queue = Executors.newSingleThreadExecutor();
+        /** Guards direct descriptor reads, native close and connection lifecycle flags. */
         private final Object readLock = new Object();
+        /** Original native connection; cleared after the queued close attempt. */
         private UsbDeviceConnection connection;
+        /** Rejects new work as soon as close is scheduled, before native close finishes. */
         private boolean closing = false;
+        /** Marks completion of the native close attempt, including a failed attempt. */
         private boolean closed = false;
+        /** Close callers awaiting the same queued close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
 
+        /** Takes ownership of a successfully opened native connection. */
         private Connection(Session owner, Device device, UsbDeviceConnection connection) {
             this.owner = owner;
             this.device = device;
             this.connection = connection;
         }
 
+        /** Rejects reads after close scheduling; caller holds readLock. */
         private void checkOpen() {
             if (closing) throw new IllegalStateException("USB connection is closed or detached");
         }
 
+        /** Returns the native descriptor without transferring ownership of it to the caller. */
         public int fileDescriptor() {
-            synchronized (readLock) { checkOpen(); return connection.getFileDescriptor(); }
+            synchronized (readLock) {
+                checkOpen();
+                return connection.getFileDescriptor();
+            }
         }
 
+        /** Reads Android's raw descriptor bytes while excluding native close; may return null. */
         public byte[] rawDescriptors() {
-            synchronized (readLock) { checkOpen(); return connection.getRawDescriptors(); }
+            synchronized (readLock) {
+                checkOpen();
+                return connection.getRawDescriptors();
+            }
         }
 
+        /**
+         * Enqueues management work and checks attachment validity before executing it.
+         * Explicit close drains accepted work; retirement invalidates queued work.
+         * An operation already inside a native call is not forcibly interrupted.
+         */
         private void submit(Completion completion, Callable<Object> operation) {
             synchronized (owner) {
                 Call call = new Call(owner, completion);
@@ -432,8 +584,12 @@ public final class UsbHostProxy {
             }
         }
 
-        public void serial(Completion completion) { submit(completion, () -> connection.getSerial()); }
+        /** Reads the native connection's serial on its ordered operation queue. */
+        public void serial(Completion completion) {
+            submit(completion, () -> connection.getSerial());
+        }
 
+        /** Requires the original interface reference from this device, not matching numeric IDs. */
         private void checkInterface(UsbInterface intf) {
             for (int i = 0; i < device.usbDevice.getInterfaceCount(); i++) {
                 if (device.usbDevice.getInterface(i) == intf) return;
@@ -441,18 +597,22 @@ public final class UsbHostProxy {
             throw new IllegalArgumentException("Interface belongs to another device attachment");
         }
 
+        /** Queues interface ownership validation and Android claimInterface; preserves its boolean. */
         public void claim(UsbInterface intf, boolean force, Completion completion) {
             submit(completion, () -> { checkInterface(intf); return connection.claimInterface(intf, force); });
         }
 
+        /** Queues releaseInterface for an interface belonging to this attachment. */
         public void release(UsbInterface intf, Completion completion) {
             submit(completion, () -> { checkInterface(intf); return connection.releaseInterface(intf); });
         }
 
+        /** Queues Android setInterface for the supplied interface's alternate setting. */
         public void selectInterface(UsbInterface intf, Completion completion) {
             submit(completion, () -> { checkInterface(intf); return connection.setInterface(intf); });
         }
 
+        /** Queues setConfiguration after validating the original configuration reference. */
         public void selectConfiguration(UsbConfiguration configuration, Completion completion) {
             submit(completion, () -> {
                 for (int i = 0; i < device.usbDevice.getConfigurationCount(); i++) {
@@ -462,6 +622,11 @@ public final class UsbHostProxy {
             });
         }
 
+        /**
+         * Schedules one native close after accepted work; concurrent callers share its result.
+         * A null completion is used by lifecycle cleanup. Already-closed calls succeed;
+         * a failure from the first native close attempt is not replayed to later callers.
+         */
         public void close(Completion completion) {
             synchronized (owner) {
                 if (completion != null) {

@@ -2,6 +2,11 @@ import 'dart:io';
 
 import 'package:jnigen/jnigen.dart';
 
+/// Regenerates private bindings from Android SDK 36 and the local Java sources.
+///
+/// Accepts one optional SDK directory argument, otherwise uses ANDROID_SDK_ROOT.
+/// JNIGEN_SUMMARIZER may point to a prebuilt summarizer command. Running this
+/// explicitly overwrites bindings.g.dart; it is not part of normal API calls.
 Future<void> main(List<String> args) async {
   final root = Platform.script.resolve('../');
   final sdk = args.isNotEmpty
@@ -37,6 +42,8 @@ Future<void> main(List<String> args) async {
     visitors: [
       Visitor(
         method: (method) {
+          // Java lifecycle creates backend objects; Dart receives references.
+          // Parcelable serialization is outside the public cross-platform API.
           if (method.isConstructor ||
               {
                 'describeContents',
@@ -46,6 +53,7 @@ Future<void> main(List<String> args) async {
           }
         },
         field: (field) {
+          // Parcelable creators are not useful without parcel serialization.
           if (field.originalName == 'CREATOR') field.isIncluded = false;
         },
       ),

@@ -5,8 +5,16 @@ import 'usb_configuration.dart';
 import 'usb_interface.dart';
 
 /// Android USB device API, excluding Parcelable serialization.
+///
+/// Android adapters retain original descriptor references. Descriptor getters
+/// remain readable after detach; operations requiring a live attachment, such
+/// as serial-number access, may fail. A name or platform ID is not a persistent
+/// hardware identity and can be reused after disconnection.
 abstract class UsbDevice {
   /// Returns a configuration by descriptor index.
+  ///
+  /// [index] is zero-based and must be less than [getConfigurationCount]. It is
+  /// not the configuration value returned by [UsbConfiguration.getId].
   UsbConfiguration getConfiguration(int index);
 
   /// Returns the number of configuration descriptors.
@@ -19,6 +27,8 @@ abstract class UsbDevice {
   int getDeviceId();
 
   /// Returns the platform device name used as the device-list key.
+  ///
+  /// Android returns its original name, without the private attachment UUID.
   String getDeviceName();
 
   /// Returns bDeviceProtocol.
@@ -28,6 +38,8 @@ abstract class UsbDevice {
   int getDeviceSubclass();
 
   /// Returns an interface by index across all configurations.
+  ///
+  /// [index] is zero-based and less than [getInterfaceCount], not bInterfaceNumber.
   UsbInterface getInterface(int index);
 
   /// Returns the number of interfaces across all configurations.
@@ -43,6 +55,9 @@ abstract class UsbDevice {
   String? getProductName();
 
   /// Returns the serial number, if available.
+  ///
+  /// Android reads it on a worker after validating attachment ownership. USB
+  /// permission may be required; failures are propagated, not converted to null.
   Future<String?> getSerialNumber();
 
   /// Returns idVendor.
@@ -52,12 +67,14 @@ abstract class UsbDevice {
   String getVersion();
 
   /// Android's static getDeviceId(String), renamed to avoid an instance conflict.
+  /// Does not enumerate devices or validate current presence. Non-Android returns -1.
   static Future<int> getDeviceIdFromName(String name) async {
     if (Platform.isAndroid) return AndroidUsb.deviceId(name);
     return -1;
   }
 
   /// Android's static getDeviceName(int), renamed to avoid an instance conflict.
+  /// Does not resolve a private attachment UUID. Non-Android returns null.
   static Future<String?> getDeviceNameFromId(int id) async {
     if (Platform.isAndroid) return AndroidUsb.deviceName(id);
     return null;

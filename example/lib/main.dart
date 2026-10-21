@@ -1,8 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:usb_host_proxy/usb_host_proxy.dart';
 
-// Reference every public class. This example does not perform USB operations.
+/// Displays references to every public API class, without performing USB operations.
 void main() {
+  // Type references exercise imports without initializing the Android backend.
   final api = <Type>[
     UsbManager,
     UsbDevice,

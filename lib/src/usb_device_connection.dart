@@ -11,19 +11,27 @@ import 'usb_request.dart';
 /// Android implements management and information operations through JNI.
 /// Transport and Windows extensions are not implemented by the Android backend.
 /// Operations on a closed/detached Android connection fail with StateError.
+///
+/// Each Android connection has an independent ordered queue for management
+/// operations. Interface/configuration arguments must be original descriptors
+/// from the same attachment; matching numeric IDs alone do not establish ownership.
 abstract class UsbDeviceConnection {
   // Android USB host API.
 
   /// Returns the Android native file descriptor.
+  /// Ownership stays with this connection; the integer is invalid after close.
   Future<int> getFileDescriptor();
 
   /// Returns the raw USB descriptors.
+  /// Android's null result is preserved; returned bytes are copied into Dart
+  /// memory. Reading does not issue an additional control transfer here.
   Future<Uint8List?> getRawDescriptors();
 
   /// Returns the device serial string.
   Future<String?> getSerial();
 
   /// Claims [intf] before transferring on its non-control endpoints.
+  /// [force] is forwarded to Android; the native boolean result is preserved.
   Future<bool> claimInterface(UsbInterface intf, {bool force = false});
 
   /// Releases this connection's interface claim according to OS access rules.
@@ -39,6 +47,7 @@ abstract class UsbDeviceConnection {
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
+  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
     Uint8List? buffer, {
@@ -51,6 +60,7 @@ abstract class UsbDeviceConnection {
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
+  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
   Future<int> controlTransfer(
     int requestType,
     int request,
@@ -65,26 +75,35 @@ abstract class UsbDeviceConnection {
   /// Waits for a completed request queued on any endpoint of this connection.
   ///
   /// [timeout] is in milliseconds. Null denotes an indefinite wait; zero polls.
+  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
   Future<UsbRequest?> requestWait({int? timeout});
 
   /// Closes the connection.
   ///
   /// Android close is idempotent and waits for in-flight management operations.
   /// Detaching the device or ending the engine session also closes it.
+  /// Explicit close drains already-accepted work; detach or session end rejects
+  /// queued work before native access. A native call already running is not
+  /// forcibly interrupted. JNI finalization alone does not close the connection.
   Future<void> close();
 
-  // Windows USB pipe extensions.
+  // Windows USB pipe extensions. Every method in this group currently fails
+  // with UnsupportedError on Android; there is no Windows backend yet.
 
   /// Clears the pipe stall and resets its data toggle; returns success.
+  /// The Android backend currently fails with UnsupportedError.
   Future<bool> resetPipe(UsbInterface intf, UsbEndpoint endpoint);
 
   /// Aborts all pending transfers on the interface's endpoint pipe.
+  /// The Android backend currently fails with UnsupportedError.
   Future<bool> abortPipe(UsbInterface intf, UsbEndpoint endpoint);
 
   /// Discards data cached for the interface's endpoint pipe; returns success.
+  /// The Android backend currently fails with UnsupportedError.
   Future<bool> flushPipe(UsbInterface intf, UsbEndpoint endpoint);
 
   /// Sets a WinUSB pipe policy; returns whether the OS accepted it.
+  /// The Android backend currently fails with UnsupportedError.
   Future<bool> setPipePolicy(
     UsbInterface intf,
     UsbEndpoint endpoint,
@@ -93,6 +112,7 @@ abstract class UsbDeviceConnection {
   );
 
   /// Returns a WinUSB pipe policy value, or null if unavailable.
+  /// The Android backend currently fails with UnsupportedError.
   Future<Uint8List?> getPipePolicy(
     UsbInterface intf,
     UsbEndpoint endpoint,

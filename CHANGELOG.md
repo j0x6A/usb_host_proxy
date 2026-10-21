@@ -14,6 +14,12 @@
   across API 24, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
 - Include a minimal compilation example with its own namespace and widget test.
+- Document source responsibilities, reference ownership, synchronization,
+  attachment lifecycle and operation/error contracts without changing behavior.
+- Handle USB Activity launch/new intents through ActivityAware and the existing
+  session registry; keep launch/recreation state silent, deduplicate broadcasts
+  and remove Activity listeners independently of headless engine resources.
+- Document consumer-owned USB launch filters and extend Activity lifecycle tests.
 
 ## 0.1.0
 

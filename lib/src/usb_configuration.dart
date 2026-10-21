@@ -1,11 +1,15 @@
 import 'usb_interface.dart';
 
 /// Android USB configuration API, excluding Parcelable serialization.
+///
+/// This is descriptor information, not the connection's selected configuration.
+/// Android reads the original object through JNI without caching its fields.
 abstract class UsbConfiguration {
   /// Returns bConfigurationValue, not the configuration's list index.
   int getId();
 
   /// Returns an interface by descriptor index.
+  /// [index] is zero-based and less than [getInterfaceCount], not an interface ID.
   UsbInterface getInterface(int index);
 
   /// Returns the number of interface descriptors, including alternate settings.

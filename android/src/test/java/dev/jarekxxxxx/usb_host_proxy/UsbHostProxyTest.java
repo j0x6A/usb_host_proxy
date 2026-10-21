@@ -30,30 +30,62 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+/**
+ * Backend contract tests using mocked USB objects, not physical USB or Dart-JNI calls.
+ * Test names identify the scenario and expected invariant. The SDK matrix covers
+ * the pre/post-31 PendingIntent and pre/post-33 receiver/Parcelable branches.
+ */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {24, 31, 33, 35}, manifest = Config.NONE)
 public class UsbHostProxyTest {
+    /** Framework service double; its responses are controlled independently of events. */
     private UsbManager manager;
+    /** Real Robolectric application context with only the USB service overridden. */
     private Context context;
+    /** Initial native descriptor double at the reusable Android name. */
     private UsbDevice usb;
+    /** Native connection returned when the initial device is opened. */
     private UsbDeviceConnection nativeConnection;
+    /** Engine 42's backend session, replaced only in lifecycle-specific tests. */
     private UsbHostProxy.Session session;
+    /** Initial canonical wrapper; retained to test stale attachment rejection. */
     private UsbHostProxy.Device device;
+    /** Simulated live discovery list; broadcasting alone does not change presence. */
     private HashMap<String, UsbDevice> attachedDevices;
 
+    /** Records callbacks without suppressing duplicates, so assertions can detect them. */
     private static final class Result implements UsbHostProxy.Completion {
+        /** Publishes the first result from a worker to the awaiting test thread. */
         final CountDownLatch done = new CountDownLatch(1);
+        /** Last successful payload, including false or null native results. */
         Object value;
+        /** Last failure, if any; kept separate from a successful null value. */
         Throwable error;
+        /** Number of deliveries, used to detect a late second completion. */
         int completions;
-        @Override public void success(Object value) { this.value = value; completions++; done.countDown(); }
-        @Override public void failure(Throwable error) { this.error = error; completions++; done.countDown(); }
+
+        /** Records success before releasing the waiter. */
+        @Override public void success(Object value) {
+            this.value = value;
+            completions++;
+            done.countDown();
+        }
+
+        /** Records failure before releasing the waiter. */
+        @Override public void failure(Throwable error) {
+            this.error = error;
+            completions++;
+            done.countDown();
+        }
+
+        /** Bounds test waiting; this is not a production USB permission timeout. */
         Result await() throws InterruptedException {
             assertTrue("USB operation timed out", done.await(10, TimeUnit.SECONDS));
             return this;
         }
     }
 
+    /** Starts a session with one present device; no USB hardware is accessed. */
     @Before public void setUp() {
         manager = mock(UsbManager.class);
         context = new ContextWrapper(RuntimeEnvironment.getApplication()) {
@@ -74,8 +106,12 @@ public class UsbHostProxyTest {
         device = session.deviceList()[0];
     }
 
-    @After public void tearDown() { UsbHostProxy.detach(42); }
+    /** Disposes pending work and schedules any remaining connection cleanup. */
+    @After public void tearDown() {
+        UsbHostProxy.detach(42);
+    }
 
+    /** Opens the initial attachment and waits for its Java completion callback. */
     private UsbHostProxy.Connection open() throws Exception {
         Result result = new Result();
         session.open(device, result);
@@ -83,6 +119,7 @@ public class UsbHostProxyTest {
         return (UsbHostProxy.Connection) result.value;
     }
 
+    /** Removes live presence before delivering detach, then drains receiver callbacks. */
     private void detachDevice() {
         attachedDevices.remove(usb.getDeviceName());
         context.sendBroadcast(new Intent(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -90,12 +127,14 @@ public class UsbHostProxyTest {
         shadowOf(Looper.getMainLooper()).idle();
     }
 
+    /** Inspects private identity without adding a test-only public JNI accessor. */
     private static String internalId(UsbHostProxy.Device device) throws Exception {
         Field field = UsbHostProxy.Device.class.getDeclaredField("internalId");
         field.setAccessible(true);
         return (String) field.get(device);
     }
 
+    /** Replaces the discovery object only; this alone is not proof of reattachment. */
     private UsbDevice sameNameDevice() {
         UsbDevice replacement = mock(UsbDevice.class);
         when(replacement.getDeviceName()).thenReturn(usb.getDeviceName());
@@ -103,6 +142,7 @@ public class UsbHostProxyTest {
         return replacement;
     }
 
+    /** Delivers a queued event independently of the separately controlled live list. */
     private void broadcast(String action, UsbDevice payload) {
         context.sendBroadcast(new Intent(action).putExtra(UsbManager.EXTRA_DEVICE, payload));
         shadowOf(Looper.getMainLooper()).idle();
