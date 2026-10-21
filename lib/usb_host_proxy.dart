@@ -6,8 +6,8 @@
 ///
 /// Android USB Host classes and protocol constants are represented without
 /// UsbAccessory. Potentially blocking operations execute outside the Dart
-/// isolate; descriptor getters directly read the original objects. Device events use streams, and
-/// requestPermission returns the decision instead of exposing PendingIntent.
+/// isolate; descriptor getters directly read the original objects. Device events
+/// use streams; requestPermission returns the decision instead of PendingIntent.
 ///
 /// Java overloads share one Dart method with named optional arguments. Static
 /// UsbDevice name/ID conversions use getDeviceIdFromName/getDeviceNameFromId

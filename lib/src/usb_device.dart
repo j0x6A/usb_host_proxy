@@ -52,14 +52,12 @@ abstract class UsbDevice {
   String getVersion();
 
   /// Android's static getDeviceId(String), renamed to avoid an instance conflict.
-  ///
   static Future<int> getDeviceIdFromName(String name) async {
     if (Platform.isAndroid) return AndroidUsb.deviceId(name);
     return -1;
   }
 
   /// Android's static getDeviceName(int), renamed to avoid an instance conflict.
-  ///
   static Future<String?> getDeviceNameFromId(int id) async {
     if (Platform.isAndroid) return AndroidUsb.deviceName(id);
     return null;

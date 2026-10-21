@@ -1,5 +1,5 @@
 name: usb_host_proxy_example
-description: Minimal Android app referencing usb_host_proxy API declarations without performing USB operations.
+description: Minimal Android app displaying usb_host_proxy API names without USB operations.
 publish_to: none
 version: 0.2.0
 

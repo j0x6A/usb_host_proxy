@@ -1,5 +1,5 @@
 name: usb_host_proxy
-description: Android USB Host management through JNI, with shared USB API declarations and planned Windows extensions. Data transport is not implemented.
+description: Android USB Host management through JNI. Data transport and the Windows backend are not implemented.
 version: 0.2.0
 publish_to: none
 
@@ -10,12 +10,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # Runtime support for Java interop.
   jni: ^1.1.0
 
 dev_dependencies:
   flutter_lints: ^6.0.0
-  # Development-time binding generator; bindings are added during implementation.
   jnigen: ^1.0.1
 
 flutter:

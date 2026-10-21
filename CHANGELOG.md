@@ -6,13 +6,8 @@
 - Keep blocking connection operations on independent per-connection queues;
   close connections on detach and engine shutdown/restart.
 - Add Android lifecycle/concurrency unit tests.
-
-- Convert the package to an Android Flutter plugin with a registration skeleton.
-- Add JNI runtime and JNIgen development dependencies for planned Java interop.
-- Remove MethodChannel template code and its obsolete tests and dependencies.
-- Keep one example MainActivity and use Gradle namespace for the library manifest.
-- Give the example a separate namespace while preserving its application ID.
-- Adapt the example widget test and document the current development status.
+- Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
+- Include a minimal compilation example with its own namespace and widget test.
 
 ## 0.1.0
 

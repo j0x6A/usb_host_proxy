@@ -55,7 +55,6 @@ class UsbManager {
   }
 
   /// Whether the application currently has permission to access [device].
-  ///
   Future<bool> hasPermission(UsbDevice device) async {
     if (Platform.isAndroid) return AndroidUsb.instance.hasPermission(device);
     return false;
