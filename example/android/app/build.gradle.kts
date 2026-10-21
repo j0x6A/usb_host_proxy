@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jarekxxxxx.usb_host_proxy"
+    namespace = "dev.jarekxxxxx.usb_host_proxy_example"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 

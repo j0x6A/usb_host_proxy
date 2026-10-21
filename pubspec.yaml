@@ -12,10 +12,8 @@ dependencies:
     sdk: flutter
   # Runtime support for Java interop.
   jni: ^1.1.0
-  plugin_platform_interface: ^2.1.8
+
 dev_dependencies:
-  flutter_test:
-    sdk: flutter
   flutter_lints: ^6.0.0
   # Development-time binding generator; bindings are added during implementation.
   jnigen: ^1.0.1

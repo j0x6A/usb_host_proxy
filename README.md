@@ -33,7 +33,7 @@ Descriptor classes have no public data fields or constructors for manually
 creating descriptors. Default results do not establish platform behavior.
 
 This package is currently private. `publish_to: none` disables publication to
-pub.dev. Any future GitHub repository must remain private unless explicitly
+pub.dev. The GitHub repository must remain private unless explicitly
 authorized otherwise.
 
 ## Requirements
@@ -105,8 +105,8 @@ and migration history. Generated registration, build outputs, local SDK paths,
 and editor files are ignored. The library lockfile is ignored; the example
 lockfile records application dependency resolution. The example version is
 currently aligned with the package version by convention, not automatically.
-Existing template tests still refer to the template API and need adaptation
-when test code is brought into scope.
+The example widget test checks the displayed compilation message. USB behavior
+tests will be added with the backend implementation.
 
 ## Example APK
 
