@@ -10,3 +10,13 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  jni: ^1.1.0
+dev_dependencies:
+  jnigen: ^1.0.1
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: dev.jarekxxxxx.usb_host_proxy
+        pluginClass: UsbHostProxyPlugin
