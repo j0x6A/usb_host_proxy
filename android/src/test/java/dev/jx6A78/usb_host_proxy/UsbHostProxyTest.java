@@ -36,7 +36,7 @@ import org.robolectric.annotation.Config;
  * the pre/post-31 PendingIntent and pre/post-33 receiver/Parcelable branches.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = {24, 31, 33, 35}, manifest = Config.NONE)
+@Config(sdk = {28, 31, 33, 35}, manifest = Config.NONE)
 public class UsbHostProxyTest {
     /** Framework service double; its responses are controlled independently of events. */
     private UsbManager manager;

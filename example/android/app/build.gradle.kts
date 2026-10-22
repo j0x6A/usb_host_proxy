@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.jx6A78.usb_host_proxy"
-        minSdk = flutter.minSdkVersion
+        minSdk = 28
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

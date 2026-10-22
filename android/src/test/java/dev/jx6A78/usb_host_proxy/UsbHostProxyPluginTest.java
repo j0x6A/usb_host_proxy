@@ -36,7 +36,7 @@ import org.robolectric.annotation.Config;
  * so duplicate delivery and stale state do not get hidden by the fixture.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = {24, 31, 33, 35}, manifest = Config.NONE)
+@Config(sdk = {28, 31, 33, 35}, manifest = Config.NONE)
 public class UsbHostProxyPluginTest {
     /** Stable lookup key used to inspect the session registered by the plugin. */
     private static final long ENGINE_ID = 42;

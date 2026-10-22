@@ -24,7 +24,7 @@ transfers are outside this implementation.
 
 ## Requirements and use
 
-Dart >=3.13.5 <4.0.0, Flutter >=3.47.7 and Android API >=24.
+Dart >=3.13.5 <4.0.0, Flutter >=3.47.7 and Android API >=28 (Android 9).
 Add the package to an application's `pubspec.yaml`:
 
 ```yaml
@@ -196,7 +196,7 @@ The SDK path can instead come from `ANDROID_SDK_ROOT`. `JNIGEN_SUMMARIZER`
 optionally selects a prebuilt ApiSummarizer command. Do not edit generated
 binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool.
 
-Android unit test sources in `android/src/test/java` target API 24, 31, 33 and 35
+Android unit test sources in `android/src/test/java` target API 28, 31, 33 and 35
 to cover the permission PendingIntent and receiver API branches. They use
 Robolectric and mocked USB objects; they cover attachment identity, duplicate
 events, permission replies, ownership, connection queues and cleanup. Interface

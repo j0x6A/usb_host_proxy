@@ -1,5 +1,6 @@
 ## 0.2.0 (unreleased)
 
+- Require Android API 28 (Android 9) or later in the plugin and diagnostic example.
 - Implement Android USB Host enumeration, descriptor access, permissions,
   connection management, interface/configuration selection and device events
   using JNI/JNIgen, without data transport.
@@ -11,7 +12,7 @@
   instances and report detach when enumeration detects absence. Unobserved
   same-name unplug/replug cycles cannot be distinguished.
 - Add Android lifecycle/concurrency, attachment identity and permission tests
-  across API 24, 31, 33 and 35, including plugin engine callbacks.
+  across API 28, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
 - Provide a launcher/USB-started diagnostic example with its own namespace
   and fake-backed widget tests, without data transfers.

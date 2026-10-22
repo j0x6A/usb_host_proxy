@@ -1,6 +1,6 @@
 # usb_host_proxy_example
 
-Manual USB Host diagnostics for a physical Android device (API >=24) with USB
+Manual USB Host diagnostics for a physical Android device (API >=28, Android 9) with USB
 Host/OTG support. Start it from the launcher or Android's USB app chooser.
 Application ID: `dev.jx6A78.usb_host_proxy`. There are no data transfers and
 no Windows implementation.
