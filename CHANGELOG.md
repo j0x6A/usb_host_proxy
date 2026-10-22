@@ -22,6 +22,10 @@
   console to the example; opt only the diagnostic app into all-device USB launch.
 - Give console categories fixed colors: cyan USB events, green success, amber
   negative results, red errors and gray information, with widget coverage.
+- Keep console history until Clear or screen disposal, always scroll new entries
+  to the end and provide Clear directly below the 330-pixel console.
+- Stabilize diagnostic sections across USB states with reserved status/error rows
+  and independently scrollable raw/descriptor panels; test geometry and lifecycle.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing

@@ -52,8 +52,28 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    library records ownership history or infers claim state from earlier results.
    Android/kernel decide what each call can do. An exception is never shown as false.
 6. **Close** releases the connection. Unsupported actions are disabled. The log
-   retains the latest 40 operation results, events and failures. Close calls native
-   close, not individual releases, and permanently invalidates the connection.
+   retains operation results, events and failures until Clear or screen disposal.
+   Close calls native close, not individual releases, and permanently invalidates
+   the connection.
+
+## Fixed screen layout
+
+All sections and controls remain in the layout, including when discovery is
+empty or the selected device is detached. USB state changes only displayed
+values and enabled callbacks. Status/error rows reserve 24 logical pixels each;
+long text is ellipsized and its tooltip exposes the complete value. Unavailable
+values use placeholders, while FD/raw values are blank until read.
+
+Raw descriptors have an 80-pixel panel and the descriptor tree a 240-pixel panel,
+each with independent scrolling. Their contents, including errors and long
+descriptor strings, do not move subsequent sections. The console remains 330
+pixels high. These three scroll controllers belong to the screen and are not
+recreated on selection, Open/Close or attach/detach. The page still scrolls as
+a whole; controls need not fit simultaneously on a phone screen.
+
+Interface descriptor failures leave the selector, Force and Claim/Release
+controls in place but disable unsafe callbacks. This affects presentation only,
+not USB ownership, permission or operation policy.
 
 The console is oldest-first on a dark background with monospace text. Colors
 come from an explicit message category, never from matching words in its text:
@@ -70,9 +90,17 @@ Both USB events always use cyan. A null Open result, invalid file descriptor or
 null raw-descriptor result uses amber; readable connection metadata uses green.
 These colors describe the returned operation result, not cached interface ownership.
 
-The console has independent scrolling, follows new entries only at the tail (24-pixel tolerance),
-and stops following while older entries are being read. Entries beyond the last
-40 are discarded, including entries currently being read.
+The console is 330 logical pixels high and scrolls independently of the page.
+Every appended message scrolls it to the end after layout, even if the user was
+reading earlier entries. Attached and Detached behave identically. History is
+chronological and unlimited for the screen's lifetime, so memory use grows with
+the number of messages. **Clear**, directly below the console, empties history
+and resets its scroll position without logging a confirmation or affecting USB
+selection, permissions, connections or pending operations. Subsequent messages
+are added normally and again scroll to the end. Only Clear or screen disposal
+removes history; there is no automatic trimming.
+If the outer list recreates an offscreen console, controller attachment also
+restores the end after layout, without scrolling the enclosing page.
 
 ## Lifecycle and concurrency
 
@@ -113,13 +141,17 @@ passed to Claim/Release, not the active configuration or alternate setting.
   result-acceptance rule, not a replacement for the plugin's attachment UUID.
 - `_deviceLabel`, `_descriptorDetails` and `_interfaceControls` render public API
   data and local operation results; they do not open devices while building.
+- `_statusLine` reserves stable status/error geometry. The raw/descriptor panels
+  constrain variable data to their own scroll areas rather than growing the page.
 - `_interfaceOperation` invokes the chosen method and logs the returned boolean;
   `_run` reports exceptions without converting them to false. Java validates
   descriptor ownership and lifecycle, leaving claim policy to Android.
   `_forceClaim` is only user input.
 - `_LogLevel` distinguishes USB events, successes, negative results, exceptions
-  and ordinary information. `_log` appends category-colored entries and follows the tail after
-  layout; `_consoleScroll` is disposed with the screen. No log stream or replay
+  and ordinary information. `_log` appends category-colored entries and scrolls
+  to the end after layout. `_scrollConsoleToEnd` also handles reattachment after
+  the outer list hid the console offscreen, with disposal/client guards. All
+  three panel controllers are disposed with the screen. No log stream or replay
   service is added to the plugin.
 - `test/widget_test.dart`: fake public interfaces and controlled-future scenarios.
   No production manager methods are replaced or mocked inside the plugin.
@@ -131,8 +163,11 @@ It covers automatic/manual/event discovery, empty state, permission decisions,
 descriptor display, open/null/errors, claim/release results, selection cleanup,
 out-of-order results, same-name replacement after detach and screen disposal,
 None/Force behavior, repeated Claim/Release, all five console color categories
-and console history/scrolling. Color tests include exception text resembling a
-USB/success message to ensure text content never determines the category.
+and unlimited console history, unconditional scrolling, Clear and disposal.
+Layout tests compare section types, positions, dimensions and scroll-position
+identity across USB states, long data, pending operations and descriptor errors.
+Color tests include exception text resembling a USB/success message to ensure
+text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor validation, ordering and lifecycle independently of the UI.

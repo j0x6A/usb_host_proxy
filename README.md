@@ -209,8 +209,12 @@ also checks initial/new Activity intents, both Intent/broadcast delivery orders,
 invalid payloads, stale intents/listeners and Activity configuration changes.
 
 Widget tests in `example/test` exercise the diagnostic UI using a fake manager,
-including None selectors, force forwarding, console order/tail scrolling,
-cleanup and late results. They do not execute JNI. There is currently
+including None selectors, force forwarding, fixed section geometry, unlimited
+console history, unconditional end scrolling, Clear, cleanup and late results.
+The raw/descriptor panels scroll independently; USB state changes replace data
+and enabled callbacks rather than adding/removing sections. Tests compare panel
+dimensions, section positions and retained scroll-position objects, not only text.
+They do not execute JNI. There is currently
 no automated Dart-to-JNI integration test or physical-device test; Java tests do
 not verify JNI reference ownership, Dart error mapping or real Android USB
 behavior. The [example](example/README.md) supports manual management checks on

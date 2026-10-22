@@ -70,11 +70,18 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   int? _fileDescriptor;
   String? _rawDescriptors;
 
-  /// Bounded chronological observations, independent of the controls' scrolling.
+  /// Chronological history retained until Clear or disposal, without a size limit.
   final List<({String text, Color color})> _messages = [];
 
   /// Owned by the screen; disposed after result acceptance has been disabled.
-  final ScrollController _consoleScroll = ScrollController();
+  late final ScrollController _consoleScroll = ScrollController(
+    onAttach: (_) => _scrollConsoleToEnd(),
+  );
+
+  /// Screen-owned controllers are not replaced on USB state changes. Flutter may
+  /// clamp their offsets when panel contents shrink; that does not replace them.
+  final ScrollController _rawScroll = ScrollController();
+  final ScrollController _descriptorScroll = ScrollController();
 
   // Versions arbitrate results, not device identity (the private UUID stays native).
   int _selectionVersion = 0;
@@ -122,15 +129,12 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
 
   /// Appends visible results, or sends cleanup messages to debug output after disposal.
   /// Category alone determines color; text and prior USB results are not inspected.
-  /// Follows only the tail; a user scroll before layout cancels that append's jump.
+  /// Every append scrolls only the console to its end after layout.
   void _log(String message, [_LogLevel level = _LogLevel.info]) {
     if (!_alive) {
       debugPrint('USB diagnostics: $message');
       return;
     }
-    final offset = _consoleScroll.hasClients ? _consoleScroll.offset : 0.0;
-    final follow =
-        !_consoleScroll.hasClients || _consoleScroll.position.extentAfter <= 24;
     final color = switch (level) {
       _LogLevel.info => const Color(0xFFAAAAAA),
       _LogLevel.usbEvent => const Color(0xFF55D9EF),
@@ -140,18 +144,17 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     };
     setState(() {
       _messages.add((text: message, color: color));
-      if (_messages.length > 40) _messages.removeAt(0);
     });
-    if (follow) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Do not override a user scroll between appending and laying out the text.
-        if (_alive &&
-            _consoleScroll.hasClients &&
-            _consoleScroll.offset == offset) {
-          _consoleScroll.jumpTo(_consoleScroll.position.maxScrollExtent);
-        }
-      });
-    }
+    _scrollConsoleToEnd();
+  }
+
+  /// Also handles a console recreated after the outer lazy list hid it offscreen.
+  void _scrollConsoleToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_alive && _consoleScroll.hasClients) {
+        _consoleScroll.jumpTo(_consoleScroll.position.maxScrollExtent);
+      }
+    });
   }
 
   /// Invalidates the selected name on detach, then requests a fresh public list.
@@ -461,11 +464,32 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       unawaited(_closeOwned(connection, 'Screen cleanup'));
     }
     _consoleScroll.dispose();
+    _rawScroll.dispose();
+    _descriptorScroll.dispose();
     super.dispose();
   }
 
   /// Common VID/PID/address formatting; never changes values sent to Android.
   String _hex(int value) => '0x${value.toRadixString(16).padLeft(4, '0')}';
+
+  /// One reserved line: long values/errors never move the sections below it.
+  /// The tooltip retains the complete message when the displayed text is ellipsized.
+  Widget _statusLine(String key, String text, {TextStyle? style}) => SizedBox(
+    key: Key(key),
+    height: 24,
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Tooltip(
+        message: text,
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        ),
+      ),
+    ),
+  );
 
   /// Optional product-name failure must not hide readable VID/PID values.
   String _deviceLabel(String name, UsbDevice device) {
@@ -541,86 +565,101 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   }
 
   /// Selects original descriptors without performing or tracking interface claims.
+  /// Getter failures change only content/availability, never remove these controls.
   Widget _interfaceControls() {
+    int? id;
+    String? descriptorError;
+    final items = <DropdownMenuItem<int>>[
+      const DropdownMenuItem(value: -1, child: Text('None')),
+    ];
     try {
-      final id = _interfaceIndex == null
+      id = _interfaceIndex == null
           ? null
           : _interfaces[_interfaceIndex!].getId();
-      final usable = _idle && _connection != null && id != null;
-      final selection = _selectionVersion;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          DropdownButton<int>(
-            key: const Key('interfaces'),
-            value: _interfaceIndex ?? -1,
-            isExpanded: true,
-            items: [
-              const DropdownMenuItem(value: -1, child: Text('None')),
-              for (var i = 0; i < _interfaces.length; i++)
-                DropdownMenuItem(
-                  value: i,
-                  child: Text(
-                    'Interface ${_interfaces[i].getId()}, '
-                    'alt ${_interfaces[i].getAlternateSetting()} (descriptor $i)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: _idle
-                ? (index) {
-                    // A dropdown route may return after detach or device selection.
-                    if (_current(selection) && _idle && index != null) {
-                      if (index >= -1 && index < _interfaces.length) {
-                        setState(
-                          () => _interfaceIndex = index == -1 ? null : index,
-                        );
-                      }
+      for (var i = 0; i < _interfaces.length; i++) {
+        items.add(
+          DropdownMenuItem(
+            value: i,
+            child: Text(
+              'Interface ${_interfaces[i].getId()}, '
+              'alt ${_interfaces[i].getAlternateSetting()} (descriptor $i)',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      descriptorError = 'Interface descriptor error: $error';
+      id = null;
+      items.removeRange(1, items.length);
+    }
+    final usable =
+        _idle && _connection != null && id != null && descriptorError == null;
+    final selection = _selectionVersion;
+    return Column(
+      key: const Key('interface-controls'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButton<int>(
+          key: const Key('interfaces'),
+          value: descriptorError == null ? _interfaceIndex ?? -1 : -1,
+          isExpanded: true,
+          items: items,
+          onChanged: _idle && descriptorError == null
+              ? (index) {
+                  // A dropdown route may return after detach or device selection.
+                  if (_current(selection) && _idle && index != null) {
+                    if (index >= -1 && index < _interfaces.length) {
+                      setState(
+                        () => _interfaceIndex = index == -1 ? null : index,
+                      );
                     }
                   }
-                : null,
+                }
+              : null,
+        ),
+        _statusLine(
+          'interface-status',
+          id == null
+              ? 'No interface selected'
+              : 'Interface $id: ${_connection == null ? 'no open connection' : 'selected'}',
+        ),
+        _statusLine('interface-error', descriptorError ?? 'Interface error: —'),
+        const Text(
+          'Claim/Release results are shown in the console; Android manages ownership.',
+        ),
+        SwitchListTile(
+          key: const Key('force'),
+          title: Text(
+            'Force claim: ${_forceClaim ? 'ON' : 'OFF'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-          Text(
-            id == null
-                ? 'No interface selected'
-                : 'Interface $id: ${_connection == null ? 'no open connection' : 'selected'}',
-          ),
-          const Text(
-            'Claim/Release results are shown in the console; Android manages ownership.',
-          ),
-          SwitchListTile(
-            key: const Key('force'),
-            title: Text('Force claim: ${_forceClaim ? 'ON' : 'OFF'}'),
-            value: _forceClaim,
-            onChanged: _idle
-                ? (value) => setState(() => _forceClaim = value)
-                : null,
-          ),
-          Wrap(
-            spacing: 8,
-            children: [
-              ElevatedButton(
-                key: const Key('claim'),
-                onPressed: usable
-                    ? () => _interfaceOperation(claim: true)
-                    : null,
-                child: const Text('Claim'),
-              ),
-              ElevatedButton(
-                key: const Key('release'),
-                onPressed: usable
-                    ? () => _interfaceOperation(claim: false)
-                    : null,
-                child: const Text('Release'),
-              ),
-            ],
-          ),
-        ],
-      );
-    } catch (error) {
-      return Text('Interface descriptor error: $error');
-    }
+          value: _forceClaim,
+          onChanged: _idle && descriptorError == null
+              ? (value) => setState(() => _forceClaim = value)
+              : null,
+        ),
+        Wrap(
+          spacing: 8,
+          children: [
+            ElevatedButton(
+              key: const Key('claim'),
+              onPressed: usable ? () => _interfaceOperation(claim: true) : null,
+              child: const Text('Claim'),
+            ),
+            ElevatedButton(
+              key: const Key('release'),
+              onPressed: usable
+                  ? () => _interfaceOperation(claim: false)
+                  : null,
+              child: const Text('Release'),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 
   @override
@@ -640,14 +679,22 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               onPressed: () => _refresh(),
               child: const Text('Refresh devices'),
             ),
-            if (_refreshing) const Text('Enumerating devices…'),
-            if (_scanError != null) Text('Enumeration error: $_scanError'),
-            if (_devices.isEmpty && !_refreshing)
-              Text(
-                _scanError == null
-                    ? 'No USB devices connected'
-                    : 'Device list unavailable',
-              ),
+            _statusLine(
+              'scan-status',
+              _refreshing ? 'Enumerating devices…' : 'Enumeration: idle',
+            ),
+            _statusLine(
+              'scan-error',
+              'Enumeration error: ${_scanError ?? '—'}',
+            ),
+            _statusLine(
+              'device-list-status',
+              _devices.isEmpty && !_refreshing
+                  ? (_scanError == null
+                        ? 'No USB devices connected'
+                        : 'Device list unavailable')
+                  : 'Devices: ${_devices.length}',
+            ),
             DropdownButton<String>(
               key: const Key('devices'),
               // Android device paths are nonempty; empty is the UI-only None value.
@@ -674,29 +721,38 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               },
             ),
             const Divider(),
-            if (device == null) const Text('No device selected'),
-            if (device != null) ...[
-              Text(
-                'Selected: $_selectedName',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                _checkingPermission
-                    ? 'Checking permission…'
-                    : 'Permission: ${_permission == null
-                          ? 'unknown'
-                          : _permission!
-                          ? 'granted'
-                          : 'not granted'}',
-              ),
-              Text('Connection: $_connectionState'),
-            ],
-            if (!_idle)
-              Text(
-                _operation == null
-                    ? 'Closing previous connection…'
-                    : 'Running: $_operation',
-              ),
+            _statusLine(
+              'selected-device',
+              device == null
+                  ? 'No device selected'
+                  : 'Selected: $_selectedName',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            _statusLine(
+              'device-info',
+              device == null
+                  ? 'Device: —'
+                  : _deviceLabel(_selectedName!, device),
+            ),
+            _statusLine(
+              'permission-status',
+              _checkingPermission
+                  ? 'Checking permission…'
+                  : 'Permission: ${_permission == null
+                        ? 'unknown'
+                        : _permission!
+                        ? 'granted'
+                        : 'not granted'}',
+            ),
+            _statusLine('connection-status', 'Connection: $_connectionState'),
+            _statusLine(
+              'operation-status',
+              _idle
+                  ? 'Operation: —'
+                  : _operation == null
+                  ? 'Closing previous connection…'
+                  : 'Running: $_operation',
+            ),
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -738,20 +794,42 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
                 ),
               ],
             ),
-            if (_fileDescriptor != null)
-              Text('File descriptor: $_fileDescriptor'),
-            if (_rawDescriptors != null)
-              SelectableText('Raw descriptors: $_rawDescriptors'),
+            _statusLine(
+              'file-descriptor',
+              'File descriptor: ${_fileDescriptor ?? ''}',
+            ),
+            SizedBox(
+              key: const Key('raw-panel'),
+              height: 80,
+              child: SingleChildScrollView(
+                key: const Key('raw-scroll'),
+                controller: _rawScroll,
+                primary: false,
+                child: SelectableText(
+                  'Raw descriptors: ${_rawDescriptors ?? ''}',
+                ),
+              ),
+            ),
             const SizedBox(height: 12),
             _interfaceControls(),
-            if (device != null) ...[
-              const Divider(),
-              _descriptorDetails(device),
-            ],
             const Divider(),
-            const Text('Diagnostics (oldest first, last 40 entries)'),
+            SizedBox(
+              key: const Key('descriptor-panel'),
+              height: 240,
+              child: SingleChildScrollView(
+                key: const Key('descriptor-scroll'),
+                controller: _descriptorScroll,
+                primary: false,
+                child: device == null
+                    ? const Text('Descriptors: —')
+                    : _descriptorDetails(device),
+              ),
+            ),
+            const Divider(),
+            const Text('Diagnostics (oldest first)'),
             Container(
-              height: 220,
+              key: const Key('console-panel'),
+              height: 330,
               margin: const EdgeInsets.only(top: 8),
               padding: const EdgeInsets.all(8),
               color: Colors.black,
@@ -776,6 +854,14 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
                   ),
                 ),
               ),
+            ),
+            ElevatedButton(
+              key: const Key('clear'),
+              onPressed: () {
+                setState(_messages.clear);
+                if (_consoleScroll.hasClients) _consoleScroll.jumpTo(0);
+              },
+              child: const Text('Clear'),
             ),
           ],
         ),

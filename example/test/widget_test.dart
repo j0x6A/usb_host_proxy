@@ -303,7 +303,7 @@ void main() {
       await launch(tester);
       await select(tester, 'A');
       expect(find.textContaining('VID 0x1111 / PID 0x2222'), findsWidgets);
-      expect(find.textContaining('Product name error:'), findsOneWidget);
+      expect(find.textContaining('Product name error:'), findsWidgets);
       expect(find.textContaining('Descriptor error:'), findsOneWidget);
       expect(find.text('Permission: not granted'), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -560,6 +560,222 @@ void main() {
   );
 
   testWidgets(
+    'Sections keep their structure, size and position across USB states',
+    (tester) async {
+      manager.devices.clear();
+      await launch(tester);
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      await tester.pumpAndSettle();
+      const keys = [
+        'refresh',
+        'scan-status',
+        'scan-error',
+        'device-list-status',
+        'devices',
+        'selected-device',
+        'device-info',
+        'permission-status',
+        'connection-status',
+        'operation-status',
+        'permission',
+        'open',
+        'close',
+        'read',
+        'file-descriptor',
+        'raw-panel',
+        'interface-controls',
+        'interfaces',
+        'interface-status',
+        'interface-error',
+        'force',
+        'claim',
+        'release',
+        'descriptor-panel',
+        'console-panel',
+        'console',
+        'clear',
+      ];
+      // Compare actual geometry, not just widget presence: data must not move panels.
+      Map<String, Rect> geometry() => {
+        for (final key in keys) key: tester.getRect(find.byKey(Key(key))),
+      };
+      List<Type> sections() =>
+          (tester.widget<ListView>(find.byType(ListView)).childrenDelegate
+                  as SliverChildListDelegate)
+              .children
+              .map((widget) => widget.runtimeType)
+              .toList();
+      final initial = geometry();
+      final structure = sections();
+      final console = tester
+          .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+          .controller!;
+      final raw = tester
+          .widget<SingleChildScrollView>(find.byKey(const Key('raw-scroll')))
+          .controller!;
+      final descriptors = tester
+          .widget<SingleChildScrollView>(
+            find.byKey(const Key('descriptor-scroll')),
+          )
+          .controller!;
+      final consolePosition = console.position;
+      final rawPosition = raw.position;
+      final descriptorPosition = descriptors.position;
+      void expectStable() {
+        expect(geometry(), initial);
+        expect(sections(), structure);
+        expect(console.position, same(consolePosition));
+        expect(raw.position, same(rawPosition));
+        expect(descriptors.position, same(descriptorPosition));
+        expect(tester.takeException(), isNull);
+      }
+
+      expect(initial['raw-panel']!.height, 80);
+      expect(initial['descriptor-panel']!.height, 240);
+      expect(find.text('File descriptor: '), findsOneWidget);
+      expect(find.text('Raw descriptors: '), findsOneWidget);
+      expect(find.text('Descriptors: —'), findsOneWidget);
+      for (final key in [
+        'permission',
+        'open',
+        'close',
+        'read',
+        'claim',
+        'release',
+      ]) {
+        expect(enabled(tester, key), isFalse);
+      }
+      first.productName = List.filled(80, 'long product name').join(' ');
+      first.interfaces.addAll(
+        List.generate(30, (i) => FakeInterface(i, number: i + 1)),
+      );
+      manager.devices['A'] = first;
+      manager.attached.add(first);
+      await tester.pumpAndSettle();
+      expectStable();
+      await select(tester, 'A');
+      expectStable();
+      expect(descriptors.position.maxScrollExtent, greaterThan(0));
+      expect(enabled(tester, 'permission'), isTrue);
+      manager.requestResult = true;
+      await press(tester, 'permission');
+      expectStable();
+      connection.onRawDescriptors = () async =>
+          Uint8List.fromList(List.generate(512, (i) => i % 256));
+      await press(tester, 'open');
+      expectStable();
+      await press(tester, 'read');
+      expectStable();
+      expect(raw.position.maxScrollExtent, greaterThan(0));
+      final consoleOffset = console.offset;
+      raw.jumpTo(raw.position.maxScrollExtent);
+      descriptors.jumpTo(descriptors.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expectStable();
+      expect(console.offset, consoleOffset);
+      await selectInterface(tester, 0);
+      expect(enabled(tester, 'claim'), isTrue);
+      expect(enabled(tester, 'release'), isTrue);
+      expectStable();
+      await press(tester, 'close');
+      expectStable();
+      expect(find.text('File descriptor: '), findsOneWidget);
+      expect(find.text('Raw descriptors: '), findsOneWidget);
+      manager.devices.remove('A');
+      manager.detached.add(first);
+      await tester.pumpAndSettle();
+      expectStable();
+      expect(find.text('Descriptors: —'), findsOneWidget);
+      expect(console.position.extentAfter, closeTo(0, 0.1));
+      manager.onScan = () async =>
+          throw StateError(List.filled(80, 'long scan error').join(' '));
+      await press(tester, 'refresh');
+      expectStable();
+    },
+  );
+
+  testWidgets(
+    'Pending, failing descriptors and rapid attach/detach keep all sections',
+    (tester) async {
+      await launch(tester);
+      const keys = [
+        'scan-status',
+        'scan-error',
+        'devices',
+        'selected-device',
+        'device-info',
+        'permission-status',
+        'connection-status',
+        'operation-status',
+        'raw-panel',
+        'interface-controls',
+        'force',
+        'claim',
+        'release',
+        'descriptor-panel',
+        'console-panel',
+        'clear',
+      ];
+      final initial = {
+        for (final key in keys) key: tester.getRect(find.byKey(Key(key))),
+      };
+      void expectStable() {
+        expect({
+          for (final key in keys) key: tester.getRect(find.byKey(Key(key))),
+        }, initial);
+        expect(tester.takeException(), isNull);
+      }
+
+      final permission = Completer<bool>();
+      manager.onCheck = (_) => permission.future;
+      await select(tester, 'A');
+      expect(find.text('Checking permission…'), findsOneWidget);
+      expectStable();
+      permission.complete(true);
+      await tester.pumpAndSettle();
+      expectStable();
+      final opened = Completer<UsbDeviceConnection?>();
+      manager.onOpen = (_) => opened.future;
+      await press(tester, 'open');
+      expect(find.text('Running: Open'), findsOneWidget);
+      expectStable();
+      first.interfaces[0].descriptorError = true;
+      manager.detached.add(
+        second,
+      ); // Rebuild without selecting the failing interface.
+      await tester.pumpAndSettle();
+      expectStable();
+      expect(
+        find.textContaining('Interface descriptor error:'),
+        findsOneWidget,
+      );
+      expect(enabled(tester, 'claim'), isFalse);
+      expect(enabled(tester, 'release'), isFalse);
+      opened.complete(connection);
+      await tester.pumpAndSettle();
+      expectStable();
+      manager.devices.remove('A');
+      manager.detached.add(first);
+      await tester.pumpAndSettle();
+      expectStable();
+      first.interfaces[0].descriptorError = false;
+      manager.onOpen = (_) async => FakeConnection();
+      for (var i = 0; i < 4; i++) {
+        manager.devices['A'] = first;
+        manager.attached.add(first);
+        await tester.pumpAndSettle();
+        await select(tester, 'A');
+        await press(tester, 'open');
+        expectStable();
+        manager.devices.remove('A');
+        manager.detached.add(first);
+        await tester.pumpAndSettle();
+        expectStable();
+      }
+    },
+  );
+
+  testWidgets(
     'Console colors distinguish USB events, results, errors and information',
     (tester) async {
       await launch(tester);
@@ -645,59 +861,239 @@ void main() {
     },
   );
 
-  testWidgets('Console is chronological, bounded and follows only its tail', (
+  testWidgets(
+    'Console retains every entry and always scrolls to the latest message',
+    (tester) async {
+      await launch(tester);
+      await tester.ensureVisible(find.byKey(const Key('console')));
+      final console = tester.widget<SingleChildScrollView>(
+        find.byKey(const Key('console')),
+      );
+      final scroll = console.controller!;
+      final page = tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byType(ListView),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      final pageOffset = page.pixels;
+      expect(
+        tester
+            .widget<Container>(find.byKey(const Key('console-panel')))
+            .constraints!
+            .maxHeight,
+        330,
+      );
+      for (var i = 0; i < 25; i++) {
+        manager.attached.add(FakeDevice('event-$i'));
+        await tester.pump();
+        await tester.pump();
+        expect(scroll.position.extentAfter, closeTo(0, 0.1));
+        expect(page.pixels, pageOffset);
+      }
+      final lines = tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byKey(const Key('console')),
+              matching: find.byType(Text),
+            ),
+          )
+          .toList();
+      expect(lines.first.data, 'Attached: event-0');
+      expect(lines.last.data, 'Attached: event-24');
+      expect(lines.first.style!.fontFamily, 'monospace');
+      expect(lines.first.style!.color, const Color(0xFF55D9EF));
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      scroll.jumpTo(0);
+      await tester.pump();
+      manager.detached.add(FakeDevice('older-reading'));
+      await tester.pump();
+      await tester.pump();
+      expect(scroll.offset, greaterThan(0));
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      scroll.jumpTo(0);
+      await tester.pump();
+      for (var i = 25; i < 45; i++) {
+        manager.attached.add(FakeDevice('event-$i'));
+        await tester.pump();
+        await tester.pump();
+        expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      }
+      final retained = tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byKey(const Key('console')),
+              matching: find.byType(Text),
+            ),
+          )
+          .toList();
+      expect(retained.length, 46);
+      expect(retained.first.data, 'Attached: event-0');
+      expect(retained[25].data, 'Detached: older-reading');
+      expect(retained.last.data, 'Attached: event-44');
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Clear empties only the console while USB work remains pending', (
     tester,
   ) async {
     await launch(tester);
-    await tester.ensureVisible(find.byKey(const Key('console')));
-    final console = tester.widget<SingleChildScrollView>(
-      find.byKey(const Key('console')),
+    await select(tester, 'B');
+    await press(tester, 'open');
+    await selectInterface(tester, 0);
+    for (var i = 0; i < 45; i++) {
+      manager.attached.add(FakeDevice('before-clear-$i'));
+    }
+    await tester.pumpAndSettle();
+    final scroll = tester
+        .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+        .controller!;
+    expect(scroll.offset, greaterThan(0));
+    final claim = Completer<bool>();
+    connection.onClaim = () => claim.future;
+    await press(tester, 'claim');
+    expect(enabled(tester, 'claim'), isFalse);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('clear'))).dy,
+      greaterThanOrEqualTo(
+        tester.getBottomLeft(find.byKey(const Key('console-panel'))).dy,
+      ),
     );
-    final scroll = console.controller!;
-    for (var i = 0; i < 25; i++) {
-      manager.attached.add(FakeDevice('event-$i'));
-      await tester.pump();
-      await tester.pump();
-    }
-    final lines = tester
-        .widgetList<Text>(
-          find.descendant(
-            of: find.byKey(const Key('console')),
-            matching: find.byType(Text),
-          ),
-        )
-        .toList();
-    expect(lines.first.data, 'Attached: event-0');
-    expect(lines.last.data, 'Attached: event-24');
-    expect(lines.first.style!.fontFamily, 'monospace');
-    expect(lines.first.style!.color, const Color(0xFF55D9EF));
-    expect(scroll.position.extentAfter, closeTo(0, 0.1));
-    scroll.jumpTo(0);
-    await tester.pump();
-    manager.attached.add(FakeDevice('older-reading'));
-    await tester.pump();
-    await tester.pump();
+    await press(tester, 'clear');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('console')),
+        matching: find.byType(Text),
+      ),
+      findsNothing,
+    );
     expect(scroll.offset, 0);
-    expect(scroll.position.extentAfter, greaterThan(0));
-    scroll.jumpTo(scroll.position.maxScrollExtent);
-    await tester.pump();
-    for (var i = 25; i < 45; i++) {
-      manager.attached.add(FakeDevice('event-$i'));
+    expect(scroll.position.maxScrollExtent, 0);
+    expect(find.text('Selected: B'), findsOneWidget);
+    expect(find.text('Permission: granted'), findsOneWidget);
+    expect(find.text('Connection: Open'), findsOneWidget);
+    expect(find.text('Running: Claim'), findsOneWidget);
+    expect(
+      tester
+          .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+          .value,
+      0,
+    );
+    expect(manager.opens, 1);
+    expect(manager.requests, 0);
+    expect(connection.claims, 1);
+    expect(connection.releases, 0);
+    expect(connection.closes, 0);
+    claim.complete(true);
+    await tester.pumpAndSettle();
+    expect(find.text('Claim interface 0: true'), findsOneWidget);
+    for (var i = 0; i < 30; i++) {
+      manager.attached.add(FakeDevice('after-clear-$i'));
       await tester.pump();
       await tester.pump();
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
     }
-    final retained = tester
-        .widgetList<Text>(
-          find.descendant(
-            of: find.byKey(const Key('console')),
-            matching: find.byType(Text),
-          ),
-        )
-        .toList();
-    expect(retained.length, 40);
-    expect(retained.first.data, 'Attached: event-6');
-    expect(retained.last.data, 'Attached: event-44');
+    expect(find.text('Attached: before-clear-0'), findsNothing);
+    expect(find.text('Attached: after-clear-29'), findsOneWidget);
+    expect(scroll.offset, greaterThan(0));
+    await press(tester, 'clear');
+    expect(scroll.offset, 0);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('console')),
+        matching: find.byType(Text),
+      ),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Detach layout changes keep the console at its latest entry', (
+    tester,
+  ) async {
+    await launch(tester);
+    await select(tester, 'B');
+    await press(tester, 'open');
+    final scroll = tester
+        .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+        .controller!;
+    for (var i = 0; i < 45; i++) {
+      manager.attached.add(FakeDevice('history-$i'));
+    }
+    await tester.pumpAndSettle();
+    scroll.jumpTo(0);
+    manager.devices.remove('B');
+    manager.detached.add(second);
+    await tester.pumpAndSettle();
+    expect(find.text('No device selected'), findsOneWidget);
+    expect(find.text('Detached: B'), findsOneWidget);
+    expect(find.text('Selection cleanup: closed'), findsOneWidget);
     expect(scroll.position.extentAfter, closeTo(0, 0.1));
+    expect(scroll.offset, greaterThan(0));
+    expect(connection.closes, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Messages added offscreen are at the end when the console reattaches',
+    (tester) async {
+      await launch(tester);
+      await tester.binding.setSurfaceSize(const Size(500, 400));
+      await select(tester, 'B');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('console')), findsNothing);
+      for (var i = 0; i < 45; i++) {
+        manager.attached.add(FakeDevice('offscreen-$i'));
+      }
+      await tester.pumpAndSettle();
+      final page = tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byType(ListView),
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      expect(
+        page.pixels,
+        0,
+      ); // New log entries never scroll the enclosing page.
+      // Move the page itself, not a drag intercepted by a nested data panel.
+      for (
+        var step = 0;
+        step < 20 && find.byKey(const Key('console')).evaluate().isEmpty;
+        step++
+      ) {
+        page.jumpTo(page.maxScrollExtent);
+        await tester.pumpAndSettle();
+      }
+      await tester.pumpAndSettle();
+      final scroll = tester
+          .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+          .controller!;
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Pending console scroll is safe when its screen is disposed', (
+    tester,
+  ) async {
+    await launch(tester);
+    manager.attached.add(first); // Schedules a post-layout console jump.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    expect(manager.attached.hasListener, isFalse);
+    expect(manager.detached.hasListener, isFalse);
     expect(tester.takeException(), isNull);
   });
 }
@@ -769,6 +1165,8 @@ class FakeConnection implements UsbDeviceConnection {
   Future<bool> Function()? onClaim;
   Future<bool> Function()? onRelease;
   Future<int> Function()? onFileDescriptor;
+  /// Supplies long panel contents without invoking USB transport or JNI.
+  Future<Uint8List?> Function()? onRawDescriptors;
   bool releaseResult = true;
   bool claimResult = true;
 
@@ -793,6 +1191,7 @@ class FakeConnection implements UsbDeviceConnection {
   @override
   Future<Uint8List?> getRawDescriptors() async {
     rawReads++;
+    if (onRawDescriptors != null) return onRawDescriptors!();
     return Uint8List.fromList([1, 2, 255]);
   }
 
@@ -824,6 +1223,8 @@ class FakeDevice implements UsbDevice {
 
   /// Independent optional-string failure, leaving VID/PID readable.
   bool productError = false;
+  /// Optional long display text for geometry tests, not cached production metadata.
+  String? productName;
 
   /// Two alternate settings sharing interface number zero.
   final interfaces = [FakeInterface(0), FakeInterface(1)];
@@ -836,7 +1237,7 @@ class FakeDevice implements UsbDevice {
   @override
   String getProductName() {
     if (productError) throw StateError('product unavailable');
-    return 'Test device $name';
+    return productName ?? 'Test device $name';
   }
 
   @override
@@ -894,10 +1295,16 @@ class FakeInterface implements UsbInterface {
 
   /// Interface number; test descriptors may deliberately share it.
   final int number;
+  /// Simulates a getter failure while the interface controls must stay mounted.
+  bool descriptorError = false;
   @override
   int getId() => number;
   @override
-  int getAlternateSetting() => alt;
+  int getAlternateSetting() {
+    if (descriptorError) throw StateError('interface descriptor unavailable');
+    return alt;
+  }
+
   @override
   String? getName() => null;
   @override
