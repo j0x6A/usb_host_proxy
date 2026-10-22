@@ -50,102 +50,148 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// Selects by the public list key; no fake UUID or JNI reference is involved.
+  /// Calls the selector callback by public list key; empty is its UI None value.
+  /// Popup mechanics are exercised separately from controlled-future race cases.
   Future<void> select(WidgetTester tester, String name) async {
-    await tester.ensureVisible(find.byKey(ValueKey('device-$name')));
-    await tester.tap(find.byKey(ValueKey('device-$name')));
+    final dropdown = tester.widget<DropdownButton<String>>(
+      find.byKey(const Key('devices')),
+    );
+    expect(dropdown.items!.any((item) => item.value == name), isTrue);
+    dropdown.onChanged!(name);
     await tester.pumpAndSettle();
   }
 
-  testWidgets('Enumerates automatically, handles empty state and attach refresh', (tester) async {
-    manager.devices.clear();
-    await launch(tester);
-    expect(manager.scans, 1);
-    expect(find.text('No USB devices connected'), findsOneWidget);
-    for (final key in ['permission', 'open', 'close', 'read']) {
-      expect(enabled(tester, key), isFalse);
-    }
-    expect(manager.requests, 0);
-    expect(manager.opens, 0);
-    manager.devices['A'] = first;
-    manager.attached.add(first);
+  /// Reads menu values without depending on which popup rows are currently painted.
+  List<String?> deviceChoices(WidgetTester tester) => tester
+      .widget<DropdownButton<String>>(find.byKey(const Key('devices')))
+      .items!
+      .map((item) => item.value)
+      .toList();
+
+  /// Chooses a descriptor index, or -1 for None, without performing USB work.
+  Future<void> selectInterface(WidgetTester tester, int index) async {
+    tester
+        .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+        .onChanged!(index);
     await tester.pumpAndSettle();
-    expect(manager.scans, 2);
-    expect(find.byKey(const ValueKey('device-A')), findsOneWidget);
-    await select(tester, 'A');
-    expect(find.textContaining('VID 0x1111 / PID 0x2222'), findsWidgets);
-    expect(find.textContaining('Configuration 0: value 1'), findsOneWidget);
-    expect(find.textContaining('Endpoint 0x0081'), findsWidgets);
-    expect(find.text('Permission: not granted'), findsOneWidget);
-    expect(manager.requests, 0);
-    await press(tester, 'refresh');
-    expect(manager.scans, 3);
-    expect(manager.opens, 0);
-  });
+  }
 
-  testWidgets('Permission denial/grant, open, descriptors, claim/release and close', (tester) async {
-    await launch(tester);
-    await select(tester, 'A');
-    expect(enabled(tester, 'open'), isFalse);
-    manager.requestResult = false;
-    await press(tester, 'permission');
-    expect(find.text('Request Permission: not granted (denied or detached)'), findsOneWidget);
-    expect(enabled(tester, 'open'), isFalse);
-    manager.requestResult = true;
-    await press(tester, 'permission');
-    expect(find.text('Permission: granted'), findsOneWidget);
-    expect(enabled(tester, 'permission'), isFalse);
-    await press(tester, 'open');
-    expect(find.text('Connection: Open'), findsOneWidget);
-    expect(enabled(tester, 'open'), isFalse);
-    await press(tester, 'read');
-    expect(find.text('File descriptor: 42'), findsOneWidget);
-    expect(find.textContaining('3 bytes: 01 02 ff'), findsOneWidget);
-    connection.claimResult = false;
-    await press(tester, 'claim');
-    expect(find.text('Interface 0: unclaimed'), findsOneWidget);
-    expect(enabled(tester, 'claim'), isTrue);
-    connection.claimResult = true;
-    await press(tester, 'claim');
-    expect(connection.lastInterface, same(first.interfaces[0]));
-    expect(connection.lastForce, isFalse);
-    expect(find.text('Interface 0: claimed'), findsOneWidget);
-    expect(enabled(tester, 'claim'), isFalse);
-    // Alternate settings share the same interface-number ownership state.
-    tester.widget<DropdownButton<int>>(find.byKey(const Key('interfaces'))).onChanged!(1);
-    await tester.pumpAndSettle();
-    expect(find.text('Interface 0: claimed'), findsOneWidget);
-    connection.releaseResult = false;
-    await press(tester, 'release');
-    expect(find.text('Interface 0: claimed'), findsOneWidget);
-    connection.releaseResult = true;
-    await press(tester, 'release');
-    expect(connection.lastInterface, same(first.interfaces[1]));
-    expect(find.text('Interface 0: unclaimed'), findsOneWidget);
-    expect(enabled(tester, 'release'), isFalse);
-    await press(tester, 'close');
-    expect(connection.closes, 1);
-    expect(find.text('Connection: Closed'), findsOneWidget);
-    expect(find.text('File descriptor: 42'), findsNothing);
-    expect(enabled(tester, 'read'), isFalse);
-  });
+  testWidgets(
+    'Enumerates automatically, handles empty state and attach refresh',
+    (tester) async {
+      manager.devices.clear();
+      await launch(tester);
+      expect(manager.scans, 1);
+      expect(find.text('No USB devices connected'), findsOneWidget);
+      for (final key in ['permission', 'open', 'close', 'read']) {
+        expect(enabled(tester, key), isFalse);
+      }
+      expect(manager.requests, 0);
+      expect(manager.opens, 0);
+      manager.devices['A'] = first;
+      manager.attached.add(first);
+      await tester.pumpAndSettle();
+      expect(manager.scans, 2);
+      expect(deviceChoices(tester), ['', 'A']);
+      expect(find.text('No device selected'), findsOneWidget);
+      await select(tester, 'A');
+      expect(find.textContaining('VID 0x1111 / PID 0x2222'), findsWidgets);
+      expect(find.textContaining('Configuration 0: value 1'), findsOneWidget);
+      expect(find.textContaining('Endpoint 0x0081'), findsWidgets);
+      expect(find.text('Permission: not granted'), findsOneWidget);
+      expect(manager.requests, 0);
+      await press(tester, 'refresh');
+      expect(manager.scans, 3);
+      expect(manager.opens, 0);
+    },
+  );
 
-  testWidgets('Native null and exceptions are visible without a fictitious connection', (tester) async {
-    manager.permissions['A'] = true;
-    manager.onOpen = (_) async => null;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    expect(find.textContaining('Open returned null'), findsOneWidget);
-    expect(enabled(tester, 'close'), isFalse);
-    manager.onOpen = (_) async => throw StateError('open denied');
-    await press(tester, 'open');
-    expect(find.textContaining('Open failed: Bad state: open denied'), findsOneWidget);
-    expect(find.text('Connection: Closed'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'Permission denial/grant, open, descriptors, claim/release and close',
+    (tester) async {
+      await launch(tester);
+      await select(tester, 'A');
+      expect(enabled(tester, 'open'), isFalse);
+      manager.requestResult = false;
+      await press(tester, 'permission');
+      expect(
+        find.text('Request Permission: not granted (denied or detached)'),
+        findsOneWidget,
+      );
+      expect(enabled(tester, 'open'), isFalse);
+      manager.requestResult = true;
+      await press(tester, 'permission');
+      expect(find.text('Permission: granted'), findsOneWidget);
+      expect(enabled(tester, 'permission'), isFalse);
+      await press(tester, 'open');
+      expect(find.text('Connection: Open'), findsOneWidget);
+      expect(find.text('No interface selected'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isFalse);
+      await selectInterface(tester, 0);
+      expect(enabled(tester, 'open'), isFalse);
+      await press(tester, 'read');
+      expect(find.text('File descriptor: 42'), findsOneWidget);
+      expect(find.textContaining('3 bytes: 01 02 ff'), findsOneWidget);
+      connection.claimResult = false;
+      await press(tester, 'claim');
+      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isTrue);
+      connection.claimResult = true;
+      await press(tester, 'claim');
+      expect(connection.lastInterface, same(first.interfaces[0]));
+      expect(connection.lastForce, isFalse);
+      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isFalse);
+      // Alternate settings share the same interface-number ownership state.
+      tester
+          .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+          .onChanged!(1);
+      await tester.pumpAndSettle();
+      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      connection.releaseResult = false;
+      await press(tester, 'release');
+      expect(find.text('Interface 0: UNKNOWN'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isFalse);
+      expect(enabled(tester, 'release'), isTrue);
+      await press(tester, 'release');
+      expect(find.text('Interface 0: UNKNOWN'), findsOneWidget);
+      connection.releaseResult = true;
+      await press(tester, 'release');
+      expect(connection.lastInterface, same(first.interfaces[1]));
+      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      expect(enabled(tester, 'release'), isFalse);
+      await press(tester, 'close');
+      expect(connection.closes, 1);
+      expect(find.text('Connection: Closed'), findsOneWidget);
+      expect(find.text('File descriptor: 42'), findsNothing);
+      expect(enabled(tester, 'read'), isFalse);
+    },
+  );
 
-  testWidgets('Latest enumeration wins even when an older scan finishes last', (tester) async {
+  testWidgets(
+    'Native null and exceptions are visible without a fictitious connection',
+    (tester) async {
+      manager.permissions['A'] = true;
+      manager.onOpen = (_) async => null;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      expect(find.textContaining('Open returned null'), findsOneWidget);
+      expect(enabled(tester, 'close'), isFalse);
+      manager.onOpen = (_) async => throw StateError('open denied');
+      await press(tester, 'open');
+      expect(
+        find.textContaining('Open failed: Bad state: open denied'),
+        findsOneWidget,
+      );
+      expect(find.text('Connection: Closed'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Latest enumeration wins even when an older scan finishes last', (
+    tester,
+  ) async {
     final oldScan = Completer<Map<String, UsbDevice>>();
     manager.onScan = () => oldScan.future;
     await launch(tester);
@@ -153,13 +199,15 @@ void main() {
     await press(tester, 'refresh');
     oldScan.complete({'A': first});
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('device-B')), findsOneWidget);
-    expect(find.byKey(const ValueKey('device-A')), findsNothing);
+    expect(deviceChoices(tester), ['', 'B']);
   });
 
-  testWidgets('Late permission checks do not overwrite the next selection', (tester) async {
+  testWidgets('Late permission checks do not overwrite the next selection', (
+    tester,
+  ) async {
     final oldCheck = Completer<bool>();
-    manager.onCheck = (device) => device == first ? oldCheck.future : Future.value(false);
+    manager.onCheck = (device) =>
+        device == first ? oldCheck.future : Future.value(false);
     await launch(tester);
     await select(tester, 'A');
     await select(tester, 'B');
@@ -170,44 +218,52 @@ void main() {
     expect(enabled(tester, 'open'), isFalse);
   });
 
-  testWidgets('A pending permission decision cannot grant access to another selection', (tester) async {
-    final decision = Completer<bool>();
-    manager.onRequest = (_) => decision.future;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'permission');
-    await select(tester, 'B');
-    expect(enabled(tester, 'open'), isFalse);
-    decision.complete(true);
-    await tester.pumpAndSettle();
-    expect(find.text('Selected: B'), findsOneWidget);
-    expect(find.text('Permission: granted'), findsOneWidget);
-    expect(find.text('Request Permission: granted'), findsNothing);
-    expect(enabled(tester, 'open'), isTrue);
-  });
+  testWidgets(
+    'A pending permission decision cannot grant access to another selection',
+    (tester) async {
+      final decision = Completer<bool>();
+      manager.onRequest = (_) => decision.future;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'permission');
+      await select(tester, 'B');
+      expect(enabled(tester, 'open'), isFalse);
+      decision.complete(true);
+      await tester.pumpAndSettle();
+      expect(find.text('Selected: B'), findsOneWidget);
+      expect(find.text('Permission: granted'), findsOneWidget);
+      expect(find.text('Request Permission: granted'), findsNothing);
+      expect(enabled(tester, 'open'), isTrue);
+    },
+  );
 
-  testWidgets('Late open is closed and new open stays blocked until cleanup finishes', (tester) async {
-    manager.permissions['A'] = true;
-    final opened = Completer<UsbDeviceConnection?>();
-    final closed = Completer<void>();
-    manager.onOpen = (_) => opened.future;
-    connection.onClose = () => closed.future;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    await select(tester, 'B');
-    opened.complete(connection);
-    await tester.pumpAndSettle();
-    expect(connection.closes, 1);
-    expect(enabled(tester, 'open'), isFalse);
-    closed.complete();
-    await tester.pumpAndSettle();
-    expect(find.text('Selected: B'), findsOneWidget);
-    expect(find.text('Connection: Closed'), findsOneWidget);
-    expect(enabled(tester, 'open'), isTrue);
-  });
+  testWidgets(
+    'Late open is closed and new open stays blocked until cleanup finishes',
+    (tester) async {
+      manager.permissions['A'] = true;
+      final opened = Completer<UsbDeviceConnection?>();
+      final closed = Completer<void>();
+      manager.onOpen = (_) => opened.future;
+      connection.onClose = () => closed.future;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      await select(tester, 'B');
+      opened.complete(connection);
+      await tester.pumpAndSettle();
+      expect(connection.closes, 1);
+      expect(enabled(tester, 'open'), isFalse);
+      closed.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('Selected: B'), findsOneWidget);
+      expect(find.text('Connection: Closed'), findsOneWidget);
+      expect(enabled(tester, 'open'), isTrue);
+    },
+  );
 
-  testWidgets('Selection change closes the previous published connection', (tester) async {
+  testWidgets('Selection change closes the previous published connection', (
+    tester,
+  ) async {
     manager.permissions['A'] = true;
     await launch(tester);
     await select(tester, 'A');
@@ -218,93 +274,114 @@ void main() {
     expect(enabled(tester, 'release'), isFalse);
   });
 
-  testWidgets('Enumeration absence invalidates selection even without a detach event', (tester) async {
-    manager.permissions['A'] = true;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    manager.devices.remove('A');
-    await press(tester, 'refresh');
-    expect(find.text('No device selected'), findsOneWidget);
-    expect(connection.closes, 1);
-    expect(enabled(tester, 'open'), isFalse);
-    expect(enabled(tester, 'close'), isFalse);
-  });
+  testWidgets(
+    'Enumeration absence invalidates selection even without a detach event',
+    (tester) async {
+      manager.permissions['A'] = true;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      manager.devices.remove('A');
+      await press(tester, 'refresh');
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(connection.closes, 1);
+      expect(enabled(tester, 'open'), isFalse);
+      expect(enabled(tester, 'close'), isFalse);
+    },
+  );
 
-  testWidgets('Descriptor errors remain visible without hiding VID/PID or crashing', (tester) async {
-    first.productError = true;
-    await launch(tester);
-    await select(tester, 'A');
-    expect(find.textContaining('VID 0x1111 / PID 0x2222'), findsWidgets);
-    expect(find.textContaining('Product name error:'), findsOneWidget);
-    expect(find.textContaining('Descriptor error:'), findsOneWidget);
-    expect(find.text('Permission: not granted'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'Descriptor errors remain visible without hiding VID/PID or crashing',
+    (tester) async {
+      first.productError = true;
+      await launch(tester);
+      await select(tester, 'A');
+      expect(find.textContaining('VID 0x1111 / PID 0x2222'), findsWidgets);
+      expect(find.textContaining('Product name error:'), findsOneWidget);
+      expect(find.textContaining('Descriptor error:'), findsOneWidget);
+      expect(find.text('Permission: not granted'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-  testWidgets('Detach invalidates claims even if the same name returns before completion', (tester) async {
-    manager.permissions['A'] = true;
-    final claimed = Completer<bool>();
-    connection.onClaim = () => claimed.future;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    final oldInterfaceChoice = tester.widget<DropdownButton<int>>(
-      find.byKey(const Key('interfaces')),
-    ).onChanged!;
-    await press(tester, 'claim');
-    manager.devices.remove('A');
-    manager.detached.add(first);
-    await tester.pumpAndSettle();
-    expect(find.text('No device selected'), findsOneWidget);
-    final replacement = FakeDevice('A');
-    manager.devices['A'] = replacement;
-    manager.attached.add(replacement);
-    await tester.pumpAndSettle();
-    await select(tester, 'A');
-    oldInterfaceChoice(1);
-    await tester.pumpAndSettle();
-    expect(tester.widget<DropdownButton<int>>(
-      find.byKey(const Key('interfaces')),
-    ).value, 0);
-    claimed.complete(true);
-    await tester.pumpAndSettle();
-    expect(connection.closes, 1);
-    expect(find.text('Connection: Closed'), findsOneWidget);
-    expect(find.text('Interface 0: claimed'), findsNothing);
-    expect(enabled(tester, 'release'), isFalse);
-  });
+  testWidgets(
+    'Detach invalidates claims even if the same name returns before completion',
+    (tester) async {
+      manager.permissions['A'] = true;
+      final claimed = Completer<bool>();
+      connection.onClaim = () => claimed.future;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      await selectInterface(tester, 0);
+      final oldInterfaceChoice = tester
+          .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+          .onChanged!;
+      await press(tester, 'claim');
+      manager.devices.remove('A');
+      manager.detached.add(first);
+      await tester.pumpAndSettle();
+      expect(find.text('No device selected'), findsOneWidget);
+      final replacement = FakeDevice('A');
+      manager.devices['A'] = replacement;
+      manager.attached.add(replacement);
+      await tester.pumpAndSettle();
+      await select(tester, 'A');
+      oldInterfaceChoice(1);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+            .value,
+        -1,
+      );
+      claimed.complete(true);
+      await tester.pumpAndSettle();
+      expect(connection.closes, 1);
+      expect(find.text('Connection: Closed'), findsOneWidget);
+      expect(find.text('Interface 0: CLAIMED'), findsNothing);
+      expect(enabled(tester, 'release'), isFalse);
+    },
+  );
 
-  testWidgets('Late FD read does not invoke another operation on the old connection', (tester) async {
-    manager.permissions['A'] = true;
-    final fd = Completer<int>();
-    connection.onFileDescriptor = () => fd.future;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    await press(tester, 'read');
-    await select(tester, 'B');
-    fd.complete(99);
-    await tester.pumpAndSettle();
-    expect(connection.rawReads, 0);
-    expect(find.text('File descriptor: 99'), findsNothing);
-    expect(find.text('Selected: B'), findsOneWidget);
-  });
+  testWidgets(
+    'Late FD read does not invoke another operation on the old connection',
+    (tester) async {
+      manager.permissions['A'] = true;
+      final fd = Completer<int>();
+      connection.onFileDescriptor = () => fd.future;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      await press(tester, 'read');
+      await select(tester, 'B');
+      fd.complete(99);
+      await tester.pumpAndSettle();
+      expect(connection.rawReads, 0);
+      expect(find.text('File descriptor: 99'), findsNothing);
+      expect(find.text('Selected: B'), findsOneWidget);
+    },
+  );
 
-  testWidgets('Disposal cancels both subscriptions and closes the owned connection', (tester) async {
-    manager.permissions['A'] = true;
-    await launch(tester);
-    await select(tester, 'A');
-    await press(tester, 'open');
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump();
-    expect(manager.attached.hasListener, isFalse);
-    expect(manager.detached.hasListener, isFalse);
-    expect(connection.closes, 1);
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'Disposal cancels both subscriptions and closes the owned connection',
+    (tester) async {
+      manager.permissions['A'] = true;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      expect(manager.attached.hasListener, isFalse);
+      expect(manager.detached.hasListener, isFalse);
+      expect(connection.closes, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
-  testWidgets('A connection returned after screen disposal is still closed', (tester) async {
+  testWidgets('A connection returned after screen disposal is still closed', (
+    tester,
+  ) async {
     manager.permissions['A'] = true;
     final opened = Completer<UsbDeviceConnection?>();
     manager.onOpen = (_) => opened.future;
@@ -330,8 +407,191 @@ void main() {
     await press(tester, 'open');
     connection.onClose = () async => throw StateError('close error');
     await press(tester, 'close');
-    expect(find.text('Connection: Close failed; native state unknown'), findsOneWidget);
-    expect(find.textContaining('Close failed: Bad state: close error'), findsOneWidget);
+    expect(
+      find.text('Connection: Closed; native cleanup not confirmed'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('Close failed: Bad state: close error'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Both selectors start at None and None closes without releasing',
+    (tester) async {
+      await launch(tester);
+      expect(deviceChoices(tester), ['', 'A', 'B']);
+      final devices = tester.widget<DropdownButton<String>>(
+        find.byKey(const Key('devices')),
+      );
+      expect(devices.value, '');
+      expect(
+        tester
+            .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+            .value,
+        -1,
+      );
+      expect(
+        tester
+            .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+            .items!
+            .length,
+        1,
+      );
+      await select(tester, 'B');
+      expect(find.text('No interface selected'), findsOneWidget);
+      await press(tester, 'open');
+      expect(find.text('No interface selected'), findsOneWidget);
+      expect(connection.claims, 0);
+      await selectInterface(tester, 0);
+      await press(tester, 'claim');
+      await selectInterface(tester, -1);
+      expect(connection.releases, 0);
+      expect(enabled(tester, 'claim'), isFalse);
+      expect(enabled(tester, 'release'), isFalse);
+      await selectInterface(tester, 1);
+      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      await select(tester, '');
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(connection.closes, 1);
+      expect(connection.releases, 0);
+      expect(
+        tester
+            .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+            .value,
+        -1,
+      );
+      expect(
+        tester
+            .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
+            .items!
+            .length,
+        1,
+      );
+    },
+  );
+
+  testWidgets(
+    'Force forwards user choice without guaranteeing Claim; interface states are separate',
+    (tester) async {
+      second.interfaces.add(FakeInterface(0, number: 1));
+      await launch(tester);
+      await select(tester, 'B');
+      await press(tester, 'open');
+      await selectInterface(tester, 0);
+      expect(find.text('Force claim: OFF'), findsOneWidget);
+      tester.widget<SwitchListTile>(find.byKey(const Key('force'))).onChanged!(
+        true,
+      );
+      await tester.pumpAndSettle();
+      connection.claimResult = false;
+      await press(tester, 'claim');
+      expect(connection.lastForce, isTrue);
+      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      connection.claimResult = true;
+      await press(tester, 'claim');
+      await selectInterface(tester, 2);
+      expect(find.text('Interface 1: UNCLAIMED'), findsOneWidget);
+      expect(connection.releases, 0);
+      await press(tester, 'claim');
+      connection.releaseResult = false;
+      await press(tester, 'release');
+      expect(find.text('Interface 1: UNKNOWN'), findsOneWidget);
+      await selectInterface(tester, 1);
+      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      connection.onRelease = () async => throw StateError('release validation');
+      await press(tester, 'release');
+      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      expect(
+        find.textContaining('Release failed: Bad state: release validation'),
+        findsOneWidget,
+      );
+      await press(tester, 'close');
+      expect(connection.closes, 1);
+      await press(tester, 'open');
+      expect(find.text('No interface selected'), findsOneWidget);
+      await selectInterface(tester, 0);
+      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'Empty selectors keep None visible and USB attach does not select',
+    (tester) async {
+      manager.devices.clear();
+      await launch(tester);
+      expect(deviceChoices(tester), ['']);
+      expect(find.byKey(const Key('interfaces')), findsOneWidget);
+      // Use the actual popup as well as callback-based race fixtures above.
+      await tester.tap(find.byKey(const Key('devices')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('None').last);
+      await tester.pumpAndSettle();
+      manager.devices['B'] = second;
+      manager.attached.add(second);
+      await tester.pumpAndSettle();
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(manager.opens, 0);
+      expect(manager.requests, 0);
+      expect(connection.claims, 0);
+    },
+  );
+
+  testWidgets('Console is chronological, bounded and follows only its tail', (
+    tester,
+  ) async {
+    await launch(tester);
+    await tester.ensureVisible(find.byKey(const Key('console')));
+    final console = tester.widget<SingleChildScrollView>(
+      find.byKey(const Key('console')),
+    );
+    final scroll = console.controller!;
+    for (var i = 0; i < 25; i++) {
+      manager.attached.add(FakeDevice('event-$i'));
+      await tester.pump();
+      await tester.pump();
+    }
+    final lines = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byKey(const Key('console')),
+            matching: find.byType(Text),
+          ),
+        )
+        .toList();
+    expect(lines.first.data, 'Attached: event-0');
+    expect(lines.last.data, 'Attached: event-24');
+    expect(lines.first.style!.fontFamily, 'monospace');
+    expect(lines.first.style!.color, Colors.white70);
+    expect(scroll.position.extentAfter, closeTo(0, 0.1));
+    scroll.jumpTo(0);
+    await tester.pump();
+    manager.attached.add(FakeDevice('older-reading'));
+    await tester.pump();
+    await tester.pump();
+    expect(scroll.offset, 0);
+    expect(scroll.position.extentAfter, greaterThan(0));
+    scroll.jumpTo(scroll.position.maxScrollExtent);
+    await tester.pump();
+    for (var i = 25; i < 45; i++) {
+      manager.attached.add(FakeDevice('event-$i'));
+      await tester.pump();
+      await tester.pump();
+    }
+    final retained = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byKey(const Key('console')),
+            matching: find.byType(Text),
+          ),
+        )
+        .toList();
+    expect(retained.length, 40);
+    expect(retained.first.data, 'Attached: event-6');
+    expect(retained.last.data, 'Attached: event-44');
+    expect(scroll.position.extentAfter, closeTo(0, 0.1));
     expect(tester.takeException(), isNull);
   });
 }
@@ -344,13 +604,16 @@ class FakeManager extends UsbManager {
   Map<String, bool> permissions = {};
   final attached = StreamController<UsbDevice>.broadcast(sync: true);
   final detached = StreamController<UsbDevice>.broadcast(sync: true);
+
   /// Hooks return controlled futures or throw to exercise stale/error paths.
   Future<Map<String, UsbDevice>> Function()? onScan;
   Future<bool> Function(UsbDevice)? onCheck;
   Future<bool> Function(UsbDevice)? onRequest;
   Future<UsbDeviceConnection?> Function(UsbDevice)? onOpen;
+
   /// Default request result; successful completion updates only its device name.
   bool requestResult = false;
+
   /// Observable side effects: initial discovery must not imply request or open.
   int scans = 0;
   int requests = 0;
@@ -365,21 +628,26 @@ class FakeManager extends UsbManager {
     scans++;
     return onScan?.call() ?? Future.value(Map.of(devices));
   }
+
   @override
   Future<bool> hasPermission(UsbDevice device) =>
-      onCheck?.call(device) ?? Future.value(permissions[device.getDeviceName()] ?? false);
+      onCheck?.call(device) ??
+      Future.value(permissions[device.getDeviceName()] ?? false);
   @override
   Future<bool> requestPermission(UsbDevice device) async {
     requests++;
-    final allowed = await (onRequest?.call(device) ?? Future.value(requestResult));
+    final allowed =
+        await (onRequest?.call(device) ?? Future.value(requestResult));
     permissions[device.getDeviceName()] = allowed;
     return allowed;
   }
+
   @override
   Future<UsbDeviceConnection?> openDevice(UsbDevice device) {
     opens++;
     return onOpen?.call(device) ?? Future.value(null);
   }
+
   /// Called only after the widget has relinquished both subscriptions.
   Future<void> dispose() async {
     await attached.close();
@@ -393,49 +661,64 @@ class FakeConnection implements UsbDeviceConnection {
   /// Optional gates keep close/claim/read pending across selection or disposal.
   Future<void> Function()? onClose;
   Future<bool> Function()? onClaim;
+  Future<bool> Function()? onRelease;
   Future<int> Function()? onFileDescriptor;
   bool releaseResult = true;
   bool claimResult = true;
-  /// Checks that the UI passes original descriptor instances and force:false.
+
+  /// Captures original descriptor instances and the user's chosen force value.
   UsbInterface? lastInterface;
   bool? lastForce;
+
   /// Count attempts, including failures, so repeated cleanup cannot be hidden.
   int closes = 0;
+  int claims = 0;
+  int releases = 0;
   int rawReads = 0;
   @override
   Future<void> close() async {
     closes++;
     await onClose?.call();
   }
+
   @override
-  Future<int> getFileDescriptor() => onFileDescriptor?.call() ?? Future.value(42);
+  Future<int> getFileDescriptor() =>
+      onFileDescriptor?.call() ?? Future.value(42);
   @override
   Future<Uint8List?> getRawDescriptors() async {
     rawReads++;
     return Uint8List.fromList([1, 2, 255]);
   }
+
   @override
   Future<bool> claimInterface(UsbInterface intf, {bool force = false}) {
+    claims++;
     lastInterface = intf;
     lastForce = force;
     return onClaim?.call() ?? Future.value(claimResult);
   }
+
   @override
   Future<bool> releaseInterface(UsbInterface intf) async {
+    releases++;
     lastInterface = intf;
-    return releaseResult;
+    return onRelease?.call() ?? releaseResult;
   }
+
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnsupportedError('Unexpected connection call: ${invocation.memberName}');
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'Unexpected connection call: ${invocation.memberName}',
+  );
 }
 
 /// Synthetic descriptors only; these test IDs are not an application hardware filter.
 class FakeDevice implements UsbDevice {
   FakeDevice(this.name);
   final String name;
+
   /// Independent optional-string failure, leaving VID/PID readable.
   bool productError = false;
+
   /// Two alternate settings sharing interface number zero.
   final interfaces = [FakeInterface(0), FakeInterface(1)];
   @override
@@ -449,6 +732,7 @@ class FakeDevice implements UsbDevice {
     if (productError) throw StateError('product unavailable');
     return 'Test device $name';
   }
+
   @override
   String getManufacturerName() => 'Fake';
   @override
@@ -470,8 +754,9 @@ class FakeDevice implements UsbDevice {
   @override
   UsbInterface getInterface(int index) => interfaces[index];
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnsupportedError('Unexpected device call: ${invocation.memberName}');
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'Unexpected device call: ${invocation.memberName}',
+  );
 }
 
 /// One descriptive configuration; neither fixture nor UI switches configuration.
@@ -494,12 +779,15 @@ class FakeConfiguration implements UsbConfiguration {
   UsbInterface getInterface(int index) => interfaces[index];
 }
 
-/// Alternate-setting fixture whose interface number is intentionally constant.
+/// Alternate-setting fixture; the default number is shared, but tests can add others.
 class FakeInterface implements UsbInterface {
-  FakeInterface(this.alt);
+  FakeInterface(this.alt, {this.number = 0});
+  /// Alternate setting selector, independent of connection ownership by number.
   final int alt;
+  /// Interface number used to test shared or independent ownership observations.
+  final int number;
   @override
-  int getId() => 0;
+  int getId() => number;
   @override
   int getAlternateSetting() => alt;
   @override

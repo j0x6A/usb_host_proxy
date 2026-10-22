@@ -1,4 +1,4 @@
-group = "dev.jarekxxxxx.usb_host_proxy"
+group = "dev.jx6A78.usb_host_proxy"
 version = "1.0-SNAPSHOT"
 
 buildscript {
@@ -24,7 +24,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jarekxxxxx.usb_host_proxy"
+    namespace = "dev.jx6A78.usb_host_proxy"
 
     compileSdk = 36
 

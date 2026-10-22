@@ -1,4 +1,4 @@
-package dev.jarekxxxxx.usb_host_proxy;
+package dev.jx6A78.usb_host_proxy;
 
 import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;

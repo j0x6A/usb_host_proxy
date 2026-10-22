@@ -3,15 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:usb_host_proxy/usb_host_proxy.dart';
 
+/// Local observations only; the Android connection enforces the actual contract.
+enum _InterfaceState { unclaimed, claimed, unknown }
+
+/// Console presentation severity; there is no separate library logging backend.
+enum _LogLevel { info, success, warning, error }
+
 /// Uses the real public manager in the Android engine's root isolate.
 void main() => runApp(UsbDiagnosticsApp());
 
-/// Launcher-started diagnostics. Tests supply a manager without starting JNI.
+/// USB/launcher-started diagnostics. Tests supply a manager without starting JNI.
 /// The manager is fixed for this widget's lifetime.
 class UsbDiagnosticsApp extends StatefulWidget {
   /// Accepts an optional test double; constructing a manager does not open USB.
   UsbDiagnosticsApp({super.key, UsbManager? manager})
-      : manager = manager ?? UsbManager();
+    : manager = manager ?? UsbManager();
 
   /// Public API entry point shared by discovery, streams and explicit actions.
   final UsbManager manager;
@@ -28,51 +34,75 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   /// Cancelled on dispose; subscriptions are installed before the first scan.
   StreamSubscription<UsbDevice>? _attached;
   StreamSubscription<UsbDevice>? _detached;
+
   /// Latest accepted enumeration, keyed by the unchanged public Android name.
   Map<String, UsbDevice> _devices = {};
+
   /// Selected list key, not the plugin's private attachment UUID.
   String? _selectedName;
+
   /// Retained original selection; not replaced by a new adapter on each scan.
   UsbDevice? _device;
+
   /// Original flattened interface references used as claim/release arguments.
   List<UsbInterface> _interfaces = [];
-  /// Descriptor index into [_interfaces], not bInterfaceNumber.
+
+  /// Descriptor index into [_interfaces], not bInterfaceNumber; null is UI None.
   int? _interfaceIndex;
+
   /// The sole published connection; cleared before cleanup hands it to a future.
   UsbDeviceConnection? _connection;
 
-  // Claim results belong to interface numbers on this connection, not alt settings.
-  final Set<int> _claimed = {};
+  /// Last returned results by interface number, not a native ownership registry.
+  /// Missing entries mean UNCLAIMED; selection/close clears all observations.
+  final Map<int, _InterfaceState> _interfaceStates = {};
+
+  /// Explicit user preference; forwarded only by Claim and never auto-enabled.
+  bool _forceClaim = false;
+
   /// Latest permission observation; null means unknown, not denial.
   bool? _permission;
+
   /// Automatic hasPermission work; excluded from the user-action counter.
   bool _checkingPermission = false;
+
   /// Progress/error state belongs only to the latest accepted scan version.
   bool _refreshing = false;
+
   /// UI status includes pending close and uncertainty after native close failure.
   String _connectionState = 'Closed';
   String? _scanError;
+
   /// Results of the last successful paired read; cleared on retry or selection.
   int? _fileDescriptor;
   String? _rawDescriptors;
-  /// Bounded, newest-first diagnostics; no persistent logging or replay service.
-  final List<String> _messages = [];
+
+  /// Bounded chronological observations, independent of the controls' scrolling.
+  final List<({String text, Color color})> _messages = [];
+
+  /// Owned by the screen; disposed after result acceptance has been disabled.
+  final ScrollController _consoleScroll = ScrollController();
 
   // Versions arbitrate results, not device identity (the private UUID stays native).
   int _selectionVersion = 0;
   int _scanVersion = 0;
   int _permissionVersion = 0;
+
   /// User action plus cleanup futures. This is a UI gate, not a native work queue.
   int _pendingActions = 0;
+
   /// User-action label; cleanup alone is displayed separately by [build].
   String? _operation;
+
   /// Set before asynchronous disposal work, while mounted may still be true.
   bool _disposed = false;
 
   /// Prevents setState both during and after disposal.
   bool get _alive => mounted && !_disposed;
+
   /// Discovery/selection can continue while USB action buttons are gated.
   bool get _idle => _pendingActions == 0;
+
   /// A completion may mutate selected state only while its selection is current.
   bool _current(int version) => _alive && version == _selectionVersion;
 
@@ -83,28 +113,50 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     try {
       _attached = widget.manager.deviceAttached.listen(
         (device) => _deviceEvent(device, attached: true),
-        onError: (Object error) => _log('Attach stream error: $error'),
+        onError: (Object error) =>
+            _log('Attach stream error: $error', _LogLevel.error),
       );
       _detached = widget.manager.deviceDetached.listen(
         (device) => _deviceEvent(device, attached: false),
-        onError: (Object error) => _log('Detach stream error: $error'),
+        onError: (Object error) =>
+            _log('Detach stream error: $error', _LogLevel.error),
       );
     } catch (error) {
-      _log('USB event subscription failed: $error');
+      _log('USB event subscription failed: $error', _LogLevel.error);
     }
     unawaited(_refresh());
   }
 
-  /// Reports visible results, or cleanup messages to debug output after disposal.
-  void _log(String message) {
+  /// Appends visible results, or sends cleanup messages to debug output after disposal.
+  /// Follows only the tail; a user scroll before layout cancels that append's jump.
+  void _log(String message, [_LogLevel level = _LogLevel.info]) {
     if (!_alive) {
       debugPrint('USB diagnostics: $message');
       return;
     }
+    final offset = _consoleScroll.hasClients ? _consoleScroll.offset : 0.0;
+    final follow =
+        !_consoleScroll.hasClients || _consoleScroll.position.extentAfter <= 24;
+    final color = switch (level) {
+      _LogLevel.info => Colors.white70,
+      _LogLevel.success => Colors.greenAccent,
+      _LogLevel.warning => Colors.yellowAccent,
+      _LogLevel.error => Colors.redAccent,
+    };
     setState(() {
-      _messages.insert(0, message);
-      if (_messages.length > 40) _messages.removeLast();
+      _messages.add((text: message, color: color));
+      if (_messages.length > 40) _messages.removeAt(0);
     });
+    if (follow) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Do not override a user scroll between appending and laying out the text.
+        if (_alive &&
+            _consoleScroll.hasClients &&
+            _consoleScroll.offset == offset) {
+          _consoleScroll.jumpTo(_consoleScroll.position.maxScrollExtent);
+        }
+      });
+    }
   }
 
   /// Invalidates the selected name on detach, then requests a fresh public list.
@@ -112,7 +164,10 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     if (!_alive) return;
     try {
       final name = device.getDeviceName();
-      _log('${attached ? 'Attached' : 'Detached'}: $name');
+      _log(
+        '${attached ? 'Attached' : 'Detached'}: $name',
+        attached ? _LogLevel.info : _LogLevel.warning,
+      );
       if (!attached) {
         setState(() => _devices.remove(name));
         // Public adapters are not identity tokens. Never compare Dart wrappers
@@ -120,7 +175,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
         if (_selectedName == name) _select(null);
       }
     } catch (error) {
-      _log('USB event descriptor error: $error');
+      _log('USB event descriptor error: $error', _LogLevel.error);
     }
     unawaited(_refresh());
   }
@@ -139,7 +194,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       if (!_alive || scan != _scanVersion) return;
       setState(() => _devices = Map.of(found));
       if (_selectedName != null && !found.containsKey(_selectedName)) {
-        _log('Selected device is no longer present');
+        _log('Selected device is no longer present', _LogLevel.warning);
         _select(null);
       }
       // Keep the attachment wrapper across continuous enumeration, even when
@@ -150,7 +205,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     } catch (error) {
       if (_alive && scan == _scanVersion) {
         setState(() => _scanError = '$error');
-        _log('Enumeration failed: $error');
+        _log('Enumeration failed: $error', _LogLevel.error);
       }
     } finally {
       if (_alive && scan == _scanVersion) {
@@ -172,7 +227,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       _connection = null;
       _interfaces = [];
       _interfaceIndex = null;
-      _claimed.clear();
+      _interfaceStates.clear();
       _permission = null;
       _checkingPermission = false;
       _connectionState = 'Closed';
@@ -184,14 +239,14 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     if (device == null) return;
     try {
       final interfaces = [
-        for (var i = 0; i < device.getInterfaceCount(); i++) device.getInterface(i),
+        for (var i = 0; i < device.getInterfaceCount(); i++)
+          device.getInterface(i),
       ];
       setState(() {
         _interfaces = interfaces;
-        _interfaceIndex = interfaces.isEmpty ? null : 0;
       });
     } catch (error) {
-      _log('Interface enumeration failed: $error');
+      _log('Interface enumeration failed: $error', _LogLevel.error);
     }
     unawaited(_checkPermission(device, version));
   }
@@ -208,7 +263,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     } catch (error) {
       if (_current(selection) && check == _permissionVersion) {
         setState(() => _permission = null);
-        _log('hasPermission failed: $error');
+        _log('hasPermission failed: $error', _LogLevel.error);
       }
     } finally {
       if (_current(selection) && check == _permissionVersion) {
@@ -229,7 +284,10 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     try {
       await operation(version);
     } catch (error) {
-      _log('$label${_current(version) ? '' : ' (previous selection)'} failed: $error');
+      _log(
+        '$label${_current(version) ? '' : ' (previous selection)'} failed: $error',
+        _LogLevel.error,
+      );
     } finally {
       if (_alive) {
         setState(() {
@@ -241,34 +299,51 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   }
 
   /// Owns cleanup even after disposal; no late native connection is abandoned.
-  Future<void> _closeOwned(UsbDeviceConnection connection, String reason) async {
+  Future<void> _closeOwned(
+    UsbDeviceConnection connection,
+    String reason,
+  ) async {
     if (_alive) setState(() => _pendingActions++);
     try {
       await connection.close();
-      _log('$reason: closed');
+      _log('$reason: closed', _LogLevel.success);
     } catch (error) {
-      _log('$reason failed; native close state is unknown: $error');
+      _log(
+        '$reason failed; connection unusable, native cleanup not confirmed: $error',
+        _LogLevel.error,
+      );
     } finally {
       if (_alive) setState(() => _pendingActions--);
     }
   }
 
   /// The only path requesting a system decision; reads actual permission after it.
-  Future<void> _requestPermission() => _run('Request Permission', (version) async {
+  Future<void> _requestPermission() => _run('Request Permission', (
+    version,
+  ) async {
     final device = _device;
     if (device == null || _permission == true || _checkingPermission) return;
     ++_permissionVersion; // Invalidate older automatic hasPermission results.
     setState(() => _checkingPermission = false);
     final allowed = await widget.manager.requestPermission(device);
     if (!_current(version)) return;
-    _log('Request Permission: ${allowed ? 'granted' : 'not granted (denied or detached)'}');
+    _log(
+      'Request Permission: ${allowed ? 'granted' : 'not granted (denied or detached)'}',
+      allowed ? _LogLevel.success : _LogLevel.warning,
+    );
     await _checkPermission(device, version);
   });
 
   /// Adopts a native result only for the current selection, otherwise closes it.
+  /// Every successful Open resets the interface selector to None, not its first item.
   Future<void> _open() => _run('Open', (version) async {
     final device = _device;
-    if (device == null || _permission != true || _checkingPermission || _connection != null) return;
+    if (device == null ||
+        _permission != true ||
+        _checkingPermission ||
+        _connection != null) {
+      return;
+    }
     setState(() => _connectionState = 'Opening…');
     UsbDeviceConnection? opened;
     try {
@@ -280,7 +355,10 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     if (opened == null) {
       if (_current(version)) {
         setState(() => _connectionState = 'Closed');
-        _log('Open returned null; no connection was created');
+        _log(
+          'Open returned null; no connection was created',
+          _LogLevel.warning,
+        );
       }
       return;
     }
@@ -291,8 +369,9 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     setState(() {
       _connection = opened;
       _connectionState = 'Open';
+      _interfaceIndex = null;
     });
-    _log('Open: connected');
+    _log('Open: connected', _LogLevel.success);
   });
 
   /// Transfers connection ownership to this call before awaiting native close.
@@ -302,7 +381,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     setState(() {
       _connection = null;
       _connectionState = 'Closing…';
-      _claimed.clear();
+      _interfaceStates.clear();
       _fileDescriptor = null;
       _rawDescriptors = null;
     });
@@ -310,11 +389,13 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       await connection.close();
       if (_current(version)) {
         setState(() => _connectionState = 'Closed');
-        _log('Close: closed');
+        _log('Close: closed', _LogLevel.success);
       }
     } catch (_) {
       if (_current(version)) {
-        setState(() => _connectionState = 'Close failed; native state unknown');
+        setState(
+          () => _connectionState = 'Closed; native cleanup not confirmed',
+        );
       }
       rethrow;
     }
@@ -338,42 +419,50 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       _rawDescriptors = raw == null
           ? 'null'
           : '${raw.length} bytes: ${raw.take(256).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}'
-              '${raw.length > 256 ? ' … (display limited to 256 bytes)' : ''}';
+                '${raw.length > 256 ? ' … (display limited to 256 bytes)' : ''}';
     });
-    _log('Read connection: fd=$fd, raw=${raw?.length ?? 'null'}');
+    _log(
+      'Read connection: fd=$fd, raw=${raw?.length ?? 'null'}',
+      _LogLevel.success,
+    );
   });
 
-  /// Uses original descriptors; false preserves the last confirmed local claim state.
-  Future<void> _interfaceOperation({required bool claim}) =>
-      _run(claim ? 'Claim' : 'Release', (version) async {
-        final connection = _connection;
-        final index = _interfaceIndex;
-        if (connection == null || index == null) return;
-        final intf = _interfaces[index];
-        final id = intf.getId();
-        if (claim == _claimed.contains(id)) return;
-        final success = claim
-            ? await connection.claimInterface(intf, force: false)
-            : await connection.releaseInterface(intf);
-        if (!_current(version) || !identical(connection, _connection)) return;
-        if (success) {
-          setState(() {
-            if (claim) {
-              _claimed.add(id);
-            } else {
-              _claimed.remove(id);
-            }
-          });
-        }
-        _log('${claim ? 'Claim' : 'Release'} interface $id: $success');
-      });
+  /// Mirrors returned booleans. Exceptions are logged, never invented as false.
+  /// Native enforcement remains authoritative, even if a local observation is stale.
+  Future<void> _interfaceOperation({
+    required bool claim,
+  }) => _run(claim ? 'Claim' : 'Release', (version) async {
+    final connection = _connection;
+    final index = _interfaceIndex;
+    if (connection == null || index == null) return;
+    final intf = _interfaces[index];
+    final id = intf.getId();
+    final state = _interfaceStates[id] ?? _InterfaceState.unclaimed;
+    if (claim
+        ? state != _InterfaceState.unclaimed
+        : state == _InterfaceState.unclaimed) {
+      return;
+    }
+    final success = claim
+        ? await connection.claimInterface(intf, force: _forceClaim)
+        : await connection.releaseInterface(intf);
+    if (!_current(version) || !identical(connection, _connection)) return;
+    final next = claim
+        ? (success ? _InterfaceState.claimed : _InterfaceState.unclaimed)
+        : (success ? _InterfaceState.unclaimed : _InterfaceState.unknown);
+    setState(() => _interfaceStates[id] = next);
+    _log(
+      '${claim ? 'Claim' : 'Release'} interface $id: $success → ${next.name.toUpperCase()}',
+      success ? _LogLevel.success : _LogLevel.warning,
+    );
+  });
 
   /// Settles subscription cleanup errors without an unhandled dispose-time future.
   Future<void> _cancel(StreamSubscription<UsbDevice>? subscription) async {
     try {
       await subscription?.cancel();
     } catch (error) {
-      _log('Subscription cleanup failed: $error');
+      _log('Subscription cleanup failed: $error', _LogLevel.error);
     }
   }
 
@@ -389,7 +478,10 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     unawaited(_cancel(_detached));
     final connection = _connection;
     _connection = null;
-    if (connection != null) unawaited(_closeOwned(connection, 'Screen cleanup'));
+    if (connection != null) {
+      unawaited(_closeOwned(connection, 'Screen cleanup'));
+    }
+    _consoleScroll.dispose();
     super.dispose();
   }
 
@@ -397,25 +489,20 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   String _hex(int value) => '0x${value.toRadixString(16).padLeft(4, '0')}';
 
   /// Optional product-name failure must not hide readable VID/PID values.
-  Widget _deviceTile(String name, UsbDevice device) {
+  String _deviceLabel(String name, UsbDevice device) {
     String subtitle;
     try {
-      subtitle = 'VID ${_hex(device.getVendorId())} / PID ${_hex(device.getProductId())}';
+      subtitle =
+          'VID ${_hex(device.getVendorId())} / PID ${_hex(device.getProductId())}';
     } catch (error) {
       subtitle = 'Descriptor error: $error';
     }
     try {
-      subtitle += '\n${device.getProductName() ?? '(no product name)'}';
+      subtitle += ' / ${device.getProductName() ?? '(no product name)'}';
     } catch (error) {
-      subtitle += '\nProduct name error: $error';
+      subtitle += ' / Product name error: $error';
     }
-    return ListTile(
-      key: ValueKey('device-$name'),
-      title: Text(name),
-      subtitle: Text(subtitle),
-      selected: name == _selectedName,
-      onTap: () => _select(name),
-    );
+    return '$name — $subtitle';
   }
 
   /// Displays all configurations without claiming or selecting any of them.
@@ -423,33 +510,52 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     try {
       final lines = <Widget>[
         Text('Device: ${device.getDeviceName()}'),
-        Text('VID ${_hex(device.getVendorId())} / PID ${_hex(device.getProductId())}'),
+        Text(
+          'VID ${_hex(device.getVendorId())} / PID ${_hex(device.getProductId())}',
+        ),
         Text('Product: ${device.getProductName() ?? '(unknown)'}'),
         Text('Manufacturer: ${device.getManufacturerName() ?? '(unknown)'}'),
         Text('Version: ${device.getVersion()} / ID: ${device.getDeviceId()}'),
-        Text('Class ${device.getDeviceClass()}, subclass ${device.getDeviceSubclass()}, '
-            'protocol ${device.getDeviceProtocol()}'),
+        Text(
+          'Class ${device.getDeviceClass()}, subclass ${device.getDeviceSubclass()}, '
+          'protocol ${device.getDeviceProtocol()}',
+        ),
       ];
       for (var c = 0; c < device.getConfigurationCount(); c++) {
         final config = device.getConfiguration(c);
-        lines.add(Text('Configuration $c: value ${config.getId()}, '
+        lines.add(
+          Text(
+            'Configuration $c: value ${config.getId()}, '
             '${config.getName() ?? '(unnamed)'}, ${config.getMaxPower()} mA, '
-            'self-powered=${config.isSelfPowered()}, wakeup=${config.isRemoteWakeup()}'));
+            'self-powered=${config.isSelfPowered()}, wakeup=${config.isRemoteWakeup()}',
+          ),
+        );
         for (var i = 0; i < config.getInterfaceCount(); i++) {
           final intf = config.getInterface(i);
-          lines.add(Text('  Interface ${intf.getId()}, alt ${intf.getAlternateSetting()}: '
+          lines.add(
+            Text(
+              '  Interface ${intf.getId()}, alt ${intf.getAlternateSetting()}: '
               '${intf.getName() ?? '(unnamed)'}, class ${intf.getInterfaceClass()}, '
-              'subclass ${intf.getInterfaceSubclass()}, protocol ${intf.getInterfaceProtocol()}'));
+              'subclass ${intf.getInterfaceSubclass()}, protocol ${intf.getInterfaceProtocol()}',
+            ),
+          );
           for (var e = 0; e < intf.getEndpointCount(); e++) {
             final endpoint = intf.getEndpoint(e);
-            lines.add(Text('    Endpoint ${_hex(endpoint.getAddress())}: '
+            lines.add(
+              Text(
+                '    Endpoint ${_hex(endpoint.getAddress())}: '
                 'direction=${endpoint.getDirection()}, type=${endpoint.getType()}, '
                 'attributes=${endpoint.getAttributes()}, packet=${endpoint.getMaxPacketSize()}, '
-                'interval=${endpoint.getInterval()}'));
+                'interval=${endpoint.getInterval()}',
+              ),
+            );
           }
         }
       }
-      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: lines);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: lines,
+      );
     } catch (error) {
       return Text('Descriptor error: $error');
     }
@@ -457,20 +563,22 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
 
   /// Distinguishes descriptor index/alternate setting from connection claim ID.
   Widget _interfaceControls() {
-    if (_interfaces.isEmpty) return const Text('No interfaces available');
     try {
-      final id = _interfaces[_interfaceIndex!].getId();
-      final claimed = _claimed.contains(id);
-      final usable = _idle && _connection != null;
+      final id = _interfaceIndex == null
+          ? null
+          : _interfaces[_interfaceIndex!].getId();
+      final state = _interfaceStates[id] ?? _InterfaceState.unclaimed;
+      final usable = _idle && _connection != null && id != null;
       final selection = _selectionVersion;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           DropdownButton<int>(
             key: const Key('interfaces'),
-            value: _interfaceIndex,
+            value: _interfaceIndex ?? -1,
             isExpanded: true,
             items: [
+              const DropdownMenuItem(value: -1, child: Text('None')),
               for (var i = 0; i < _interfaces.length; i++)
                 DropdownMenuItem(
                   value: i,
@@ -486,24 +594,46 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
                 ? (index) {
                     // A dropdown route may return after detach or device selection.
                     if (_current(selection) && _idle && index != null) {
-                      setState(() => _interfaceIndex = index);
+                      if (index >= -1 && index < _interfaces.length) {
+                        setState(
+                          () => _interfaceIndex = index == -1 ? null : index,
+                        );
+                      }
                     }
                   }
                 : null,
           ),
-          Text('Interface $id: ${_connection == null ? 'no open connection' : claimed ? 'claimed' : 'unclaimed'}'),
-          const Text('Claim state reflects successful operations on this connection. Force: false.'),
+          Text(
+            id == null
+                ? 'No interface selected'
+                : 'Interface $id: ${_connection == null ? 'no open connection' : state.name.toUpperCase()}',
+          ),
+          const Text(
+            'Last observed state on this connection; the driver enforces operations.',
+          ),
+          SwitchListTile(
+            key: const Key('force'),
+            title: Text('Force claim: ${_forceClaim ? 'ON' : 'OFF'}'),
+            value: _forceClaim,
+            onChanged: _idle
+                ? (value) => setState(() => _forceClaim = value)
+                : null,
+          ),
           Wrap(
             spacing: 8,
             children: [
               ElevatedButton(
                 key: const Key('claim'),
-                onPressed: usable && !claimed ? () => _interfaceOperation(claim: true) : null,
+                onPressed: usable && state == _InterfaceState.unclaimed
+                    ? () => _interfaceOperation(claim: true)
+                    : null,
                 child: const Text('Claim'),
               ),
               ElevatedButton(
                 key: const Key('release'),
-                onPressed: usable && claimed ? () => _interfaceOperation(claim: false) : null,
+                onPressed: usable && state != _InterfaceState.unclaimed
+                    ? () => _interfaceOperation(claim: false)
+                    : null,
                 child: const Text('Release'),
               ),
             ],
@@ -518,6 +648,8 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   @override
   Widget build(BuildContext context) {
     final device = _device;
+    final selection = _selectionVersion;
+    final scan = _scanVersion;
     return MaterialApp(
       title: 'USB Host diagnostics',
       home: Scaffold(
@@ -533,31 +665,85 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
             if (_refreshing) const Text('Enumerating devices…'),
             if (_scanError != null) Text('Enumeration error: $_scanError'),
             if (_devices.isEmpty && !_refreshing)
-              Text(_scanError == null ? 'No USB devices connected' : 'Device list unavailable'),
-            for (final entry in _devices.entries) _deviceTile(entry.key, entry.value),
+              Text(
+                _scanError == null
+                    ? 'No USB devices connected'
+                    : 'Device list unavailable',
+              ),
+            DropdownButton<String>(
+              key: const Key('devices'),
+              // Android device paths are nonempty; empty is the UI-only None value.
+              value: _selectedName ?? '',
+              isExpanded: true,
+              items: [
+                const DropdownMenuItem(value: '', child: Text('None')),
+                for (final entry in _devices.entries)
+                  DropdownMenuItem(
+                    value: entry.key,
+                    child: Text(
+                      _deviceLabel(entry.key, entry.value),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (name) {
+                if (_current(selection) &&
+                    scan == _scanVersion &&
+                    name != null) {
+                  _select(name.isEmpty ? null : name);
+                }
+              },
+            ),
             const Divider(),
             if (device == null) const Text('No device selected'),
             if (device != null) ...[
-              Text('Selected: $_selectedName', style: const TextStyle(fontWeight: FontWeight.bold)),
-              Text(_checkingPermission ? 'Checking permission…'
-                  : 'Permission: ${_permission == null ? 'unknown' : _permission! ? 'granted' : 'not granted'}'),
+              Text(
+                'Selected: $_selectedName',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                _checkingPermission
+                    ? 'Checking permission…'
+                    : 'Permission: ${_permission == null
+                          ? 'unknown'
+                          : _permission!
+                          ? 'granted'
+                          : 'not granted'}',
+              ),
               Text('Connection: $_connectionState'),
             ],
-            if (!_idle) Text(_operation == null ? 'Closing previous connection…' : 'Running: $_operation'),
+            if (!_idle)
+              Text(
+                _operation == null
+                    ? 'Closing previous connection…'
+                    : 'Running: $_operation',
+              ),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 ElevatedButton(
                   key: const Key('permission'),
-                  onPressed: device != null && _idle && !_checkingPermission && _permission != true
-                      ? _requestPermission : null,
+                  onPressed:
+                      device != null &&
+                          _idle &&
+                          !_checkingPermission &&
+                          _permission != true
+                      ? _requestPermission
+                      : null,
                   child: const Text('Request Permission'),
                 ),
                 ElevatedButton(
                   key: const Key('open'),
-                  onPressed: device != null && _idle && !_checkingPermission
-                      && _permission == true && _connection == null ? _open : null,
+                  onPressed:
+                      device != null &&
+                          _idle &&
+                          !_checkingPermission &&
+                          _permission == true &&
+                          _connection == null
+                      ? _open
+                      : null,
                   child: const Text('Open'),
                 ),
                 ElevatedButton(
@@ -567,22 +753,52 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
                 ),
                 ElevatedButton(
                   key: const Key('read'),
-                  onPressed: _idle && _connection != null ? _readConnection : null,
+                  onPressed: _idle && _connection != null
+                      ? _readConnection
+                      : null,
                   child: const Text('Read FD / raw descriptors'),
                 ),
               ],
             ),
-            if (_fileDescriptor != null) Text('File descriptor: $_fileDescriptor'),
-            if (_rawDescriptors != null) SelectableText('Raw descriptors: $_rawDescriptors'),
+            if (_fileDescriptor != null)
+              Text('File descriptor: $_fileDescriptor'),
+            if (_rawDescriptors != null)
+              SelectableText('Raw descriptors: $_rawDescriptors'),
+            const SizedBox(height: 12),
+            _interfaceControls(),
             if (device != null) ...[
-              const SizedBox(height: 12),
-              _interfaceControls(),
               const Divider(),
               _descriptorDetails(device),
             ],
             const Divider(),
-            const Text('Diagnostics (newest first, last 40 entries)'),
-            for (final message in _messages) Text(message),
+            const Text('Diagnostics (oldest first, last 40 entries)'),
+            Container(
+              height: 220,
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.all(8),
+              color: Colors.black,
+              child: Scrollbar(
+                controller: _consoleScroll,
+                child: SingleChildScrollView(
+                  key: const Key('console'),
+                  controller: _consoleScroll,
+                  primary: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final message in _messages)
+                        Text(
+                          message.text,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            color: message.color,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),

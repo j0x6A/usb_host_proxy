@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.jarekxxxxx.usb_host_proxy_example"
+    namespace = "dev.jx6A78.usb_host_proxy_example"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,7 +15,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.jarekxxxxx.usb_host_proxy"
+        applicationId = "dev.jx6A78.usb_host_proxy"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

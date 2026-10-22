@@ -83,7 +83,10 @@ details; invalid arguments/ownership map to `ArgumentError`, and closed
 connections or ended sessions to `StateError`.
 
 Await `close()` for each connection. Close is idempotent and drains accepted
-operations. Detach rejects further operations and queues native close. Engine
+operations, immediately rejecting new work. It invokes native close without
+individual interface releases and permanently discards interface observations,
+even on a close error; a closed connection is not UNKNOWN and cannot be reused.
+Detach rejects further operations and queues native close. Engine
 destruction/hot restart unregister receivers, settle pending calls and close
 connections. Temporary JNI references are released eagerly; escaping descriptor
 references use native finalizers because the public API has no dispose method.
@@ -93,6 +96,20 @@ running is an event; USB-triggered app launch is initial state obtained through
 `getDeviceList()`. Automatic launch requires the consuming application's USB
 intent filter and device-filter metadata. Detached descriptor objects remain
 readable, but permission/serial reads can require a live authorized attachment.
+
+Android tracks interface ownership per connection and interface number, shared
+by alternate settings. UNCLAIMED is initial: Claim true enters CLAIMED, false
+stays UNCLAIMED. Claim from CLAIMED/UNKNOWN and Release from UNCLAIMED fail with
+`StateError`. Release true enters UNCLAIMED; false enters UNKNOWN, preserving the
+native boolean. UNKNOWN allows retry Release or Close, not Claim/setInterface;
+there is no automatic recovery. Release submission blocks later claim/setInterface
+admission for that number, while earlier accepted work drains in order.
+Argument/ownership validation failures do not alter state or become false.
+Exceptions propagate as errors, retaining the last observation rather than
+inventing a native false result; exceptional side effects cannot be inferred.
+`setInterface` requires CLAIMED. Successful `setConfiguration` invalidates all
+claims; false leaves them unchanged, and UNKNOWN blocks configuration selection
+until Release or Close. These observations do not query global kernel ownership.
 
 Each observed attachment has a private `deviceName-UUID` identity within the
 engine session. Enumerations retain it; observed absence retires it and a later
@@ -138,10 +155,13 @@ hardware before using it. No device identifiers are supplied by this project.
 ```
 
 For a deliberately broader device family, Android also supports `class`,
-`subclass` and `protocol` criteria. Do not use an attribute-free `usb-device`
-entry: it matches all devices. See the [Android USB Host guide](https://developer.android.com/develop/connectivity/usb/host)
+`subclass` and `protocol` criteria. An attribute-free `usb-device` entry matches
+all devices; use it only deliberately, as in the diagnostic example. See the [Android USB Host guide](https://developer.android.com/develop/connectivity/usb/host)
 and [Activity launch modes](https://developer.android.com/guide/topics/manifest/activity-element#lmode).
-Neither the plugin manifest nor the diagnostic example installs a launch filter.
+The plugin manifest installs no launch filter. The diagnostic example deliberately
+matches all USB devices and participates in Android's chooser/default-handler
+mechanism. Accepting the system USB launch can grant permission until detach;
+the example still does not automatically select, open or claim a device.
 
 The plugin uses Flutter `ActivityAware` and the binding's new-intent listener;
 no custom MainActivity override is required with the standard Flutter embedding.
@@ -183,18 +203,23 @@ binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool
 Android unit test sources in `android/src/test/java` target API 24, 31, 33 and 35
 to cover the permission PendingIntent and receiver API branches. They use
 Robolectric and mocked USB objects; they cover attachment identity, duplicate
-events, permission replies, ownership, connection queues and cleanup.
+events, permission replies, ownership, connection queues and cleanup. Interface
+tests cover all three ownership states, native false/error results, alternate
+settings, independent connections, pending-release admission, configuration
+invalidation, close failures and detach before queued Release reaches Android.
 `UsbHostProxyPluginTest` checks engine attach, restart, destruction and plugin
 detach using a mocked Flutter engine, without starting the Flutter runtime. It
 also checks initial/new Activity intents, both Intent/broadcast delivery orders,
 invalid payloads, stale intents/listeners and Activity configuration changes.
 
 Widget tests in `example/test` exercise the diagnostic UI using a fake manager,
-including cleanup and late results. They do not execute JNI. There is currently
+including None selectors, force forwarding, console order/tail scrolling,
+cleanup and late results. They do not execute JNI. There is currently
 no automated Dart-to-JNI integration test or physical-device test; Java tests do
 not verify JNI reference ownership, Dart error mapping or real Android USB
 behavior. The [example](example/README.md) supports manual management checks on
-Android hardware without transfers, configuration changes or USB launch filters.
+Android hardware without transfers or configuration changes, with a broad USB
+launch filter. The example README lists test commands and their verification boundary.
 
 On-device verification remains necessary for JNI descriptors/list keys and
 callbacks, permission grant/refusal, detach during pending work, same-name

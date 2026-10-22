@@ -1527,19 +1527,19 @@ final class $IllegalArgumentException$Type$
   String get signature => r'Ljava/lang/IllegalArgumentException;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy`
 ///
 /// Lifecycle and asynchronous Android integration, not a copy of the USB model.
 extension type UsbHostProxy._(jni$_.JObject _$this) implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy',
   );
 
   /// The type which includes information such as the signature of this class.
   static const jni$_.JType<UsbHostProxy> type = $UsbHostProxy$Type$();
   static final _id_session = _class.staticMethodId(
     r'session',
-    r'(J)Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Session;',
+    r'(J)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Session;',
   );
 
   static final _session =
@@ -1560,7 +1560,7 @@ extension type UsbHostProxy._(jni$_.JObject _$this) implements jni$_.JObject {
             )
           >();
 
-  /// from: `synchronized static public dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Session session(long engineId)`
+  /// from: `synchronized static public dev.jx6A78.usb_host_proxy.UsbHostProxy$Session session(long engineId)`
   /// The returned object must be released after use, by calling the [release] method.
   static UsbHostProxy$Session? session(core$_.int engineId) {
     final _$$classRef = _class.reference;
@@ -1614,16 +1614,16 @@ final class $UsbHostProxy$Type$ extends jni$_.JType<UsbHostProxy> {
 
   @jni$_.internal
   @core$_.override
-  String get signature => r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy;';
+  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Connection`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Connection`
 ///
 /// Owns exactly one original connection and its own operation queue.
 extension type UsbHostProxy$Connection._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Connection',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Connection',
   );
 
   /// The type which includes information such as the signature of this class.
@@ -1691,7 +1691,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   static final _id_serial = UsbHostProxy$Connection._class.instanceMethodId(
     r'serial',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _serial =
@@ -1712,7 +1712,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void serial(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void serial(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void serial(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -1725,7 +1725,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   static final _id_claim = UsbHostProxy$Connection._class.instanceMethodId(
     r'claim',
-    r'(Landroid/hardware/usb/UsbInterface;ZLdev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Landroid/hardware/usb/UsbInterface;ZLdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _claim =
@@ -1754,7 +1754,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void claim(android.hardware.usb.UsbInterface intf, boolean force, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void claim(android.hardware.usb.UsbInterface intf, boolean force, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void claim(
     UsbInterface? intf,
     core$_.bool force,
@@ -1774,7 +1774,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   static final _id_release$1 = UsbHostProxy$Connection._class.instanceMethodId(
     r'release',
-    r'(Landroid/hardware/usb/UsbInterface;Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Landroid/hardware/usb/UsbInterface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _release$1 =
@@ -1798,7 +1798,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void release(android.hardware.usb.UsbInterface intf, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void release(android.hardware.usb.UsbInterface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void release$1(UsbInterface? intf, UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$intf = intf?.reference ?? jni$_.jNullReference;
@@ -1814,7 +1814,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
   static final _id_selectInterface = UsbHostProxy$Connection._class
       .instanceMethodId(
         r'selectInterface',
-        r'(Landroid/hardware/usb/UsbInterface;Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+        r'(Landroid/hardware/usb/UsbInterface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
       );
 
   static final _selectInterface =
@@ -1838,7 +1838,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void selectInterface(android.hardware.usb.UsbInterface intf, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void selectInterface(android.hardware.usb.UsbInterface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void selectInterface(
     UsbInterface? intf,
     UsbHostProxy$Completion? completion,
@@ -1857,7 +1857,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
   static final _id_selectConfiguration = UsbHostProxy$Connection._class
       .instanceMethodId(
         r'selectConfiguration',
-        r'(Landroid/hardware/usb/UsbConfiguration;Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+        r'(Landroid/hardware/usb/UsbConfiguration;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
       );
 
   static final _selectConfiguration =
@@ -1881,7 +1881,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void selectConfiguration(android.hardware.usb.UsbConfiguration configuration, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void selectConfiguration(android.hardware.usb.UsbConfiguration configuration, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void selectConfiguration(
     UsbConfiguration? configuration,
     UsbHostProxy$Completion? completion,
@@ -1899,7 +1899,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   static final _id_close = UsbHostProxy$Connection._class.instanceMethodId(
     r'close',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _close =
@@ -1920,7 +1920,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void close(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void close(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void close(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -1936,14 +1936,14 @@ final class $UsbHostProxy$Connection$Type$
   @jni$_.internal
   @core$_.override
   String get signature =>
-      r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Connection;';
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Connection;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Session`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Session`
 extension type UsbHostProxy$Session._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Session',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Session',
   );
 
   /// The type which includes information such as the signature of this class.
@@ -1954,7 +1954,7 @@ extension type UsbHostProxy$Session._(jni$_.JObject _$this)
 extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
   static final _id_listen = UsbHostProxy$Session._class.instanceMethodId(
     r'listen',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Events;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Events;)V',
   );
 
   static final _listen =
@@ -1975,7 +1975,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `synchronized public void listen(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Events listener)`
+  /// from: `synchronized public void listen(dev.jx6A78.usb_host_proxy.UsbHostProxy$Events listener)`
   void listen(UsbHostProxy$Events? listener) {
     final _$$selfRef = reference;
     final _$listener = listener?.reference ?? jni$_.jNullReference;
@@ -1984,7 +1984,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
 
   static final _id_deviceList = UsbHostProxy$Session._class.instanceMethodId(
     r'deviceList',
-    r'()[Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;',
+    r'()[Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;',
   );
 
   static final _deviceList =
@@ -2003,7 +2003,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `synchronized public dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device[] deviceList()`
+  /// from: `synchronized public dev.jx6A78.usb_host_proxy.UsbHostProxy$Device[] deviceList()`
   /// The returned object must be released after use, by calling the [release] method.
   jni$_.JArray<UsbHostProxy$Device?>? deviceList() {
     final _$$selfRef = reference;
@@ -2016,7 +2016,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
   static final _id_hasPermission = UsbHostProxy$Session._class
       .instanceMethodId(
         r'hasPermission',
-        r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)Z',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)Z',
       );
 
   static final _hasPermission =
@@ -2037,7 +2037,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `synchronized public boolean hasPermission(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device device)`
+  /// from: `synchronized public boolean hasPermission(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device)`
   core$_.bool hasPermission(UsbHostProxy$Device? device) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;
@@ -2051,7 +2051,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
   static final _id_requestPermission = UsbHostProxy$Session._class
       .instanceMethodId(
         r'requestPermission',
-        r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
       );
 
   static final _requestPermission =
@@ -2075,7 +2075,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `synchronized public void requestPermission(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device device, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `synchronized public void requestPermission(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void requestPermission(
     UsbHostProxy$Device? device,
     UsbHostProxy$Completion? completion,
@@ -2093,7 +2093,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
 
   static final _id_open = UsbHostProxy$Session._class.instanceMethodId(
     r'open',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _open =
@@ -2117,7 +2117,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `public void open(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device device, dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void open(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void open(
     UsbHostProxy$Device? device,
     UsbHostProxy$Completion? completion,
@@ -2142,16 +2142,16 @@ final class $UsbHostProxy$Session$Type$
   @jni$_.internal
   @core$_.override
   String get signature =>
-      r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Session;';
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Session;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Device`
 ///
 /// One observed attachment. A reused Android name alone cannot prove reattachment.
 extension type UsbHostProxy$Device._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Device',
   );
 
   /// The type which includes information such as the signature of this class.
@@ -2172,7 +2172,7 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
 
   static final _id_serial = UsbHostProxy$Device._class.instanceMethodId(
     r'serial',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
   );
 
   static final _serial =
@@ -2193,7 +2193,7 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
             )
           >();
 
-  /// from: `public void serial(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void serial(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   void serial(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -2213,16 +2213,16 @@ final class $UsbHostProxy$Device$Type$
   @jni$_.internal
   @core$_.override
   String get signature =>
-      r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;';
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Events`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Events`
 ///
 /// Startup USB intents are initial state, not replayed attach events.
 extension type UsbHostProxy$Events._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Events',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Events',
   );
 
   /// The type which includes information such as the signature of this class.
@@ -2257,12 +2257,12 @@ extension type UsbHostProxy$Events._(jni$_.JObject _$this)
       final $d = $i.methodDescriptor.toDartString(releaseOriginal: true);
       final $a = $i.args;
       if ($d ==
-          r'attached(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V') {
+          r'attached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V') {
         _$impls[$p]!.attached(($a![0] as UsbHostProxy$Device?));
         return jni$_.nullptr;
       }
       if ($d ==
-          r'detached(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V') {
+          r'detached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V') {
         _$impls[$p]!.detached(($a![0] as UsbHostProxy$Device?));
         return jni$_.nullptr;
       }
@@ -2293,14 +2293,14 @@ extension type UsbHostProxy$Events._(jni$_.JObject _$this)
       jni$_.ProtectedJniExtensions.returnResult($i.result, $r);
     });
     implementer.add(
-      r'dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Events',
+      r'dev.jx6A78.usb_host_proxy.UsbHostProxy$Events',
       $p,
       _$invokePointer,
       [
         if ($impl.attached$async)
-          r'attached(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V',
+          r'attached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
         if ($impl.detached$async)
-          r'detached(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V',
+          r'detached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
         if ($impl.disposed$async) r'disposed()V',
       ],
     );
@@ -2318,7 +2318,7 @@ extension type UsbHostProxy$Events._(jni$_.JObject _$this)
 extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
   static final _id_attached = UsbHostProxy$Events._class.instanceMethodId(
     r'attached',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
   );
 
   static final _attached =
@@ -2339,7 +2339,7 @@ extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
             )
           >();
 
-  /// from: `public abstract void attached(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device device)`
+  /// from: `public abstract void attached(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device)`
   void attached(UsbHostProxy$Device? device) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;
@@ -2352,7 +2352,7 @@ extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
 
   static final _id_detached = UsbHostProxy$Events._class.instanceMethodId(
     r'detached',
-    r'(Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Device;)V',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
   );
 
   static final _detached =
@@ -2373,7 +2373,7 @@ extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
             )
           >();
 
-  /// from: `public abstract void detached(dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Device device)`
+  /// from: `public abstract void detached(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device)`
   void detached(UsbHostProxy$Device? device) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;
@@ -2470,16 +2470,16 @@ final class $UsbHostProxy$Events$Type$
   @jni$_.internal
   @core$_.override
   String get signature =>
-      r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Events;';
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Events;';
 }
 
-/// from: `dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion`
 ///
 /// Implemented by Dart as a nonblocking JNIgen listener.
 extension type UsbHostProxy$Completion._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Completion',
   );
 
   /// The type which includes information such as the signature of this class.
@@ -2544,7 +2544,7 @@ extension type UsbHostProxy$Completion._(jni$_.JObject _$this)
       jni$_.ProtectedJniExtensions.returnResult($i.result, $r);
     });
     implementer.add(
-      r'dev.jarekxxxxx.usb_host_proxy.UsbHostProxy$Completion',
+      r'dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion',
       $p,
       _$invokePointer,
       [
@@ -2670,7 +2670,7 @@ final class $UsbHostProxy$Completion$Type$
   @jni$_.internal
   @core$_.override
   String get signature =>
-      r'Ldev/jarekxxxxx/usb_host_proxy/UsbHostProxy$Completion;';
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;';
 }
 
 /// from: `android.os.Parcelable`

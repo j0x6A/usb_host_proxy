@@ -20,6 +20,9 @@ pluginManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "9.1.0" apply false
+    // Override AGP's older KGP dependency for Flutter's version validation.
+    // Resolve the tooling only; the application sources remain Java-only.
+    id("org.jetbrains.kotlin.android") version "2.4.0" apply false
 }
 
 include(":app")

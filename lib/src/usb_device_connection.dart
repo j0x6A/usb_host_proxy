@@ -31,16 +31,32 @@ abstract class UsbDeviceConnection {
   Future<String?> getSerial();
 
   /// Claims [intf] before transferring on its non-control endpoints.
-  /// [force] is forwarded to Android; the native boolean result is preserved.
+  /// On Android this connection must record UNCLAIMED (the initial state).
+  /// Native true records CLAIMED; false leaves UNCLAIMED. CLAIMED, UNKNOWN or
+  /// a pending release reject claim with StateError before native access.
+  /// Alternate settings share state by interface number, independently per
+  /// connection. [force] is forwarded unchanged, not a guarantee of success.
   Future<bool> claimInterface(UsbInterface intf, {bool force = false});
 
   /// Releases this connection's interface claim according to OS access rules.
+  /// Android rejects UNCLAIMED with StateError. From CLAIMED or UNKNOWN, native
+  /// true records UNCLAIMED; false records UNKNOWN and is returned unchanged.
+  /// UNKNOWN permits another release or close, not claim/setInterface; no
+  /// recovery is automatic. Admission of further claim/setInterface calls is
+  /// blocked from release submission until it settles. Earlier accepted work
+  /// retains FIFO ordering. Validation errors do not change claim state or
+  /// become false results. Exceptions propagate as errors, not false, and retain
+  /// the last observation; it is not proof that an exceptional call had no effects.
   Future<bool> releaseInterface(UsbInterface intf);
 
   /// Selects the interface's alternate setting.
+  /// On Android requires CLAIMED and no pending release of this interface.
   Future<bool> setInterface(UsbInterface intf);
 
   /// Selects the configuration; returns whether the OS accepted selection.
+  /// Android success invalidates all recorded claims on this connection;
+  /// false or argument validation failure preserves them. UNKNOWN interfaces
+  /// must be released (or the connection closed) before configuration selection.
   Future<bool> setConfiguration(UsbConfiguration configuration);
 
   /// Transfers a slice on a bulk endpoint, in the endpoint's direction.
@@ -81,6 +97,12 @@ abstract class UsbDeviceConnection {
   /// Closes the connection.
   ///
   /// Android close is idempotent and waits for in-flight management operations.
+  /// Scheduling it immediately rejects new work on the entire connection.
+  /// Calls native close once, without separate per-interface release calls;
+  /// Android/kernel own resource teardown. Interface observations are discarded,
+  /// never changed to UNKNOWN on a closed connection. Even if native close
+  /// throws, this connection is permanently unusable; that error is reported
+  /// to the callers awaiting that attempt. Later close calls remain safe.
   /// Detaching the device or ending the engine session also closes it.
   /// Explicit close drains already-accepted work; detach or session end rejects
   /// queued work before native access. A native call already running is not

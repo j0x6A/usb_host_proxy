@@ -13,14 +13,22 @@
 - Add Android lifecycle/concurrency, attachment identity and permission tests
   across API 24, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
-- Provide a launcher-started USB Host diagnostic example with its own namespace
-  and fake-backed widget tests, without data transfers or USB launch filters.
+- Provide a launcher/USB-started diagnostic example with its own namespace
+  and fake-backed widget tests, without data transfers.
+- Track UNCLAIMED/CLAIMED/UNKNOWN per connection/interface number; enforce
+  claim/release transitions and release admission barriers without implicit recovery.
+- Add explicit None selectors, force claim and a chronological terminal-style
+  console to the example; opt only the diagnostic app into all-device USB launch.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing
   session registry; keep launch/recreation state silent, deduplicate broadcasts
   and remove Activity listeners independently of headless engine resources.
 - Document consumer-owned USB launch filters and extend Activity lifecycle tests.
+- Rename the Android namespace to `dev.jx6A78` and update JNI signatures,
+  source paths and example identifiers consistently.
+- Pin example KGP tooling to 2.4.0 without applying it to the app, satisfying
+  Flutter's dependency validation while keeping application/plugin sources in Java.
 
 ## 0.1.0
 
@@ -30,6 +38,5 @@
 - Declare five Windows pipe operations and nine WinUSB pipe policy constants.
 - Use abstract declarations and placeholders marked `NOT IMPLEMENTED YET`;
   placeholders return default values or do nothing.
-- Include a minimal Android compilation example with application ID
-  `dev.jarekxxxxx.usb_host_proxy`.
+- Include a minimal Android compilation example.
 - Configure private package use with `publish_to: none` and BSD-3-Clause licensing.
