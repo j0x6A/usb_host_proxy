@@ -214,8 +214,13 @@ console history, unconditional end scrolling, Clear, cleanup and late results.
 The raw/descriptor panels scroll independently; USB state changes replace data
 and enabled callbacks rather than adding/removing sections. Tests compare panel
 dimensions, section positions and retained scroll-position objects, not only text.
-They do not execute JNI. There is currently
-no automated Dart-to-JNI integration test or physical-device test; Java tests do
+The console builds rows lazily while retaining the complete message history;
+tests also cover multiline end scrolling and independent raw/descriptor panel
+offsets after offscreen destruction and recreation. Logging still rebuilds the
+screen, including its synchronous descriptor reads; lazy rows do not isolate
+those reads or bound the memory occupied by stored messages.
+Widget tests do not execute JNI. There is currently no automated Dart-to-JNI
+integration test or physical-device test; Java tests do
 not verify JNI reference ownership, Dart error mapping or real Android USB
 behavior. The [example](example/README.md) supports manual management checks on
 Android hardware without transfers or configuration changes, with a broad USB

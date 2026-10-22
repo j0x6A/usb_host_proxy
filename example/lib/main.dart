@@ -73,13 +73,15 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   /// Chronological history retained until Clear or disposal, without a size limit.
   final List<({String text, Color color})> _messages = [];
 
-  /// Owned by the screen; disposed after result acceptance has been disabled.
+  /// Owned by the screen; attachment follows the end after offscreen recreation.
+  /// Disposed after result acceptance has been disabled.
   late final ScrollController _consoleScroll = ScrollController(
     onAttach: (_) => _scrollConsoleToEnd(),
   );
 
   /// Screen-owned controllers are not replaced on USB state changes. Flutter may
   /// clamp their offsets when panel contents shrink; that does not replace them.
+  /// Panel PageStorage keys restore offsets if their scroll positions are recreated.
   final ScrollController _rawScroll = ScrollController();
   final ScrollController _descriptorScroll = ScrollController();
 
@@ -130,6 +132,8 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   /// Appends visible results, or sends cleanup messages to debug output after disposal.
   /// Category alone determines color; text and prior USB results are not inspected.
   /// Every append scrolls only the console to its end after layout.
+  /// This still rebuilds the screen; lazy rows avoid building the entire history,
+  /// but do not isolate the descriptor getters called elsewhere in [build].
   void _log(String message, [_LogLevel level = _LogLevel.info]) {
     if (!_alive) {
       debugPrint('USB diagnostics: $message');
@@ -148,11 +152,19 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     _scrollConsoleToEnd();
   }
 
+  /// Follows lazy extent corrections until the laid-out end is reached.
   /// Also handles a console recreated after the outer lazy list hid it offscreen.
+  /// Stops without clients or after disposal; no timer or persistent frame loop.
   void _scrollConsoleToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_alive && _consoleScroll.hasClients) {
-        _consoleScroll.jumpTo(_consoleScroll.position.maxScrollExtent);
+        final position = _consoleScroll.position;
+        if (position.pixels != position.maxScrollExtent) {
+          _consoleScroll.jumpTo(position.maxScrollExtent);
+          // Lazy, variable-height rows can refine the estimated extent after
+          // this jump. Follow the updated end after their next layout as well.
+          _scrollConsoleToEnd();
+        }
       }
     });
   }
@@ -802,10 +814,13 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               key: const Key('raw-panel'),
               height: 80,
               child: SingleChildScrollView(
-                key: const Key('raw-scroll'),
+                key: const PageStorageKey('raw-scroll'),
                 controller: _rawScroll,
                 primary: false,
                 child: SelectableText(
+                  // Its internal text scroll must not overwrite the panel's
+                  // independent PageStorage offset when both are disposed.
+                  key: const PageStorageKey('raw-text'),
                   'Raw descriptors: ${_rawDescriptors ?? ''}',
                 ),
               ),
@@ -815,7 +830,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               key: const Key('descriptor-panel'),
               height: 300,
               child: SingleChildScrollView(
-                key: const Key('descriptor-scroll'),
+                key: const PageStorageKey('descriptor-scroll'),
                 controller: _descriptorScroll,
                 primary: false,
                 child: device == null
@@ -835,23 +850,22 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               color: Colors.black,
               child: Scrollbar(
                 controller: _consoleScroll,
-                child: SingleChildScrollView(
+                child: ListView.builder(
                   key: const Key('console'),
                   controller: _consoleScroll,
                   primary: false,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (final message in _messages)
-                        Text(
-                          message.text,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            color: message.color,
-                          ),
-                        ),
-                    ],
-                  ),
+                  padding: EdgeInsets.zero,
+                  itemCount: _messages.length,
+                  itemBuilder: (context, index) {
+                    final message = _messages[index];
+                    return Text(
+                      message.text,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        color: message.color,
+                      ),
+                    );
+                  },
                 ),
               ),
             ),

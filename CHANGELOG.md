@@ -28,6 +28,12 @@
   and independently scrollable raw/descriptor panels; test geometry and lifecycle.
 - Enlarge the descriptor tree panel to 300 pixels, place it before interface
   controls and label the diagnostic console Log.
+- Build console rows lazily while keeping unlimited history, Clear and automatic
+  end scrolling, including corrections for variable-height entries.
+- Restore independent raw/descriptor panel offsets after offscreen recreation;
+  keep the raw text's internal scroll separate from the panel's saved position.
+- Extend widget coverage for lazy history, multiline log bursts and panel
+  destruction/recreation without changing USB operation policy.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing

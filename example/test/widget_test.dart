@@ -600,7 +600,7 @@ void main() {
         for (final key in keys) key: tester.getRect(find.byKey(Key(key))),
       };
       List<Type> sections() =>
-          (tester.widget<ListView>(find.byType(ListView)).childrenDelegate
+          (tester.widget<ListView>(find.byType(ListView).first).childrenDelegate
                   as SliverChildListDelegate)
               .children
               .map((widget) => widget.runtimeType)
@@ -608,14 +608,16 @@ void main() {
       final initial = geometry();
       final structure = sections();
       final console = tester
-          .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+          .widget<ListView>(find.byKey(const Key('console')))
           .controller!;
       final raw = tester
-          .widget<SingleChildScrollView>(find.byKey(const Key('raw-scroll')))
+          .widget<SingleChildScrollView>(
+            find.byKey(const PageStorageKey('raw-scroll')),
+          )
           .controller!;
       final descriptors = tester
           .widget<SingleChildScrollView>(
-            find.byKey(const Key('descriptor-scroll')),
+            find.byKey(const PageStorageKey('descriptor-scroll')),
           )
           .controller!;
       final consolePosition = console.position;
@@ -872,15 +874,13 @@ void main() {
     (tester) async {
       await launch(tester);
       await tester.ensureVisible(find.byKey(const Key('console')));
-      final console = tester.widget<SingleChildScrollView>(
-        find.byKey(const Key('console')),
-      );
+      final console = tester.widget<ListView>(find.byKey(const Key('console')));
       final scroll = console.controller!;
       final page = tester
           .state<ScrollableState>(
             find
                 .descendant(
-                  of: find.byType(ListView),
+                  of: find.byType(ListView).first,
                   matching: find.byType(Scrollable),
                 )
                 .first,
@@ -896,19 +896,23 @@ void main() {
       );
       for (var i = 0; i < 25; i++) {
         manager.attached.add(FakeDevice('event-$i'));
-        await tester.pump();
-        await tester.pump();
+        await tester.pumpAndSettle();
         expect(scroll.position.extentAfter, closeTo(0, 0.1));
         expect(page.pixels, pageOffset);
       }
-      final lines = tester
-          .widgetList<Text>(
-            find.descendant(
-              of: find.byKey(const Key('console')),
-              matching: find.byType(Text),
-            ),
-          )
-          .toList();
+      // History remains complete even when only visible rows are instantiated.
+      List<Text> history() {
+        final finder = find.byKey(const Key('console'));
+        final console = tester.widget<ListView>(finder);
+        final delegate = console.childrenDelegate as SliverChildBuilderDelegate;
+        final context = tester.element(finder);
+        return List.generate(
+          delegate.childCount!,
+          (i) => delegate.builder(context, i)! as Text,
+        );
+      }
+
+      final lines = history();
       expect(lines.first.data, 'Attached: event-0');
       expect(lines.last.data, 'Attached: event-24');
       expect(lines.first.style!.fontFamily, 'monospace');
@@ -917,30 +921,31 @@ void main() {
       scroll.jumpTo(0);
       await tester.pump();
       manager.detached.add(FakeDevice('older-reading'));
-      await tester.pump();
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(scroll.offset, greaterThan(0));
       expect(scroll.position.extentAfter, closeTo(0, 0.1));
       scroll.jumpTo(0);
       await tester.pump();
       for (var i = 25; i < 45; i++) {
         manager.attached.add(FakeDevice('event-$i'));
-        await tester.pump();
-        await tester.pump();
+        await tester.pumpAndSettle();
         expect(scroll.position.extentAfter, closeTo(0, 0.1));
       }
-      final retained = tester
-          .widgetList<Text>(
-            find.descendant(
-              of: find.byKey(const Key('console')),
-              matching: find.byType(Text),
-            ),
-          )
-          .toList();
+      final retained = history();
       expect(retained.length, 46);
       expect(retained.first.data, 'Attached: event-0');
       expect(retained[25].data, 'Detached: older-reading');
       expect(retained.last.data, 'Attached: event-44');
+      expect(
+        find
+            .descendant(
+              of: find.byKey(const Key('console')),
+              matching: find.byType(Text),
+            )
+            .evaluate()
+            .length,
+        lessThan(retained.length),
+      );
       expect(scroll.position.extentAfter, closeTo(0, 0.1));
       expect(tester.takeException(), isNull);
     },
@@ -958,7 +963,7 @@ void main() {
     }
     await tester.pumpAndSettle();
     final scroll = tester
-        .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+        .widget<ListView>(find.byKey(const Key('console')))
         .controller!;
     expect(scroll.offset, greaterThan(0));
     final claim = Completer<bool>();
@@ -1001,8 +1006,7 @@ void main() {
     expect(find.text('Claim interface 0: true'), findsOneWidget);
     for (var i = 0; i < 30; i++) {
       manager.attached.add(FakeDevice('after-clear-$i'));
-      await tester.pump();
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(scroll.position.extentAfter, closeTo(0, 0.1));
     }
     expect(find.text('Attached: before-clear-0'), findsNothing);
@@ -1027,7 +1031,7 @@ void main() {
     await select(tester, 'B');
     await press(tester, 'open');
     final scroll = tester
-        .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+        .widget<ListView>(find.byKey(const Key('console')))
         .controller!;
     for (var i = 0; i < 45; i++) {
       manager.attached.add(FakeDevice('history-$i'));
@@ -1062,7 +1066,7 @@ void main() {
           .state<ScrollableState>(
             find
                 .descendant(
-                  of: find.byType(ListView),
+                  of: find.byType(ListView).first,
                   matching: find.byType(Scrollable),
                 )
                 .first,
@@ -1083,10 +1087,105 @@ void main() {
       }
       await tester.pumpAndSettle();
       final scroll = tester
-          .widget<SingleChildScrollView>(find.byKey(const Key('console')))
+          .widget<ListView>(find.byKey(const Key('console')))
           .controller!;
       expect(scroll.position.maxScrollExtent, greaterThan(0));
       expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Data panels restore independent offsets after leaving the page viewport',
+    (tester) async {
+      second.interfaces.addAll(
+        List.generate(30, (i) => FakeInterface(i, number: i + 1)),
+      );
+      connection.onRawDescriptors = () async =>
+          Uint8List.fromList(List.generate(512, (i) => i % 256));
+      await launch(tester);
+      await select(tester, 'B');
+      await press(tester, 'open');
+      await press(tester, 'read');
+      await tester.binding.setSurfaceSize(const Size(500, 2400));
+      await tester.pumpAndSettle();
+      final raw = tester
+          .widget<SingleChildScrollView>(
+            find.byKey(const PageStorageKey('raw-scroll')),
+          )
+          .controller!;
+      final descriptors = tester
+          .widget<SingleChildScrollView>(
+            find.byKey(const PageStorageKey('descriptor-scroll')),
+          )
+          .controller!;
+      raw.jumpTo(raw.position.maxScrollExtent / 2);
+      descriptors.jumpTo(descriptors.position.maxScrollExtent / 3);
+      await tester.pumpAndSettle();
+      final rawOffset = raw.offset;
+      final descriptorOffset = descriptors.offset;
+      final rawPosition = raw.position;
+      final descriptorPosition = descriptors.position;
+      expect(rawOffset, greaterThan(0));
+      expect(descriptorOffset, greaterThan(0));
+      await tester.binding.setSurfaceSize(const Size(500, 300));
+      await tester.pumpAndSettle();
+      final page = tester
+          .state<ScrollableState>(
+            find
+                .descendant(
+                  of: find.byType(ListView).first,
+                  matching: find.byType(Scrollable),
+                )
+                .first,
+          )
+          .position;
+      for (var i = 0; i < 10; i++) {
+        // Lazy page extents can grow as later sections are first laid out.
+        page.jumpTo(page.maxScrollExtent);
+        await tester.pumpAndSettle();
+      }
+      expect(raw.hasClients, isFalse);
+      expect(descriptors.hasClients, isFalse);
+      page.jumpTo(0);
+      await tester.pumpAndSettle();
+      for (
+        var i = 0;
+        i < 15 && !(raw.hasClients && descriptors.hasClients);
+        i++
+      ) {
+        page.jumpTo((page.pixels + 100).clamp(0, page.maxScrollExtent));
+        await tester.pumpAndSettle();
+      }
+      // A surviving controller is not proof of restoration: both positions must
+      // have been recreated and independently recover their nonzero offsets.
+      expect(raw.position, isNot(same(rawPosition)));
+      expect(descriptors.position, isNot(same(descriptorPosition)));
+      expect(raw.offset, closeTo(rawOffset, 0.1));
+      expect(descriptors.offset, closeTo(descriptorOffset, 0.1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Variable-height log bursts reach the last row after manual scrolling',
+    (tester) async {
+      await launch(tester);
+      final scroll = tester
+          .widget<ListView>(find.byKey(const Key('console')))
+          .controller!;
+      for (var i = 0; i < 100; i++) {
+        manager.attached.add(FakeDevice('row-$i${'\nlong line' * (i % 8)}'));
+      }
+      await tester.pumpAndSettle();
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      expect(find.textContaining('Attached: row-99'), findsOneWidget);
+      scroll.jumpTo(0);
+      await tester.pumpAndSettle();
+      manager.detached.add(FakeDevice('last\nmultiline\nentry'));
+      await tester.pumpAndSettle();
+      expect(scroll.position.extentAfter, closeTo(0, 0.1));
+      expect(find.text('Detached: last\nmultiline\nentry'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

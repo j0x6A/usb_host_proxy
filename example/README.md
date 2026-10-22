@@ -71,6 +71,10 @@ The console remains 330 pixels high and is labeled **Log**. These three scroll
 controllers belong to the screen and are not recreated on selection, Open/Close
 or attach/detach. The page still scrolls as a whole; controls need not fit
 simultaneously on a phone screen.
+Independent PageStorage keys restore the raw and descriptor panel offsets when
+the outer list destroys and recreates offscreen panels with unchanged data.
+The raw text's internal scroll has a separate key so it cannot overwrite the
+raw panel's saved offset. Shorter contents can still clamp the restored position.
 
 Interface descriptor failures leave the selector, Force and Claim/Release
 controls in place but disable unsafe callbacks. This affects presentation only,
@@ -95,13 +99,18 @@ The console is 330 logical pixels high and scrolls independently of the page.
 Every appended message scrolls it to the end after layout, even if the user was
 reading earlier entries. Attached and Detached behave identically. History is
 chronological and unlimited for the screen's lifetime, so memory use grows with
-the number of messages. **Clear**, directly below the console, empties history
+the number of messages. Rows are built lazily rather than creating a Text widget
+for every stored entry. This does not isolate screen rebuilds: logging still
+updates the screen state, whose build reads selected-device descriptors.
+**Clear**, directly below the console, empties history
 and resets its scroll position without logging a confirmation or affecting USB
 selection, permissions, connections or pending operations. Subsequent messages
 are added normally and again scroll to the end. Only Clear or screen disposal
 removes history; there is no automatic trimming.
 If the outer list recreates an offscreen console, controller attachment also
 restores the end after layout, without scrolling the enclosing page.
+For variable-height rows, scrolling follows corrections to the lazy list's
+estimated extent after subsequent layouts until the current end is reached.
 
 ## Lifecycle and concurrency
 
@@ -167,6 +176,8 @@ None/Force behavior, repeated Claim/Release, all five console color categories
 and unlimited console history, unconditional scrolling, Clear and disposal.
 Layout tests compare section types, positions, dimensions and scroll-position
 identity across USB states, long data, pending operations and descriptor errors.
+They also check independent panel offsets after offscreen destruction/recreation,
+lazy console rows with complete history and scrolling after multiline log bursts.
 Color tests include exception text resembling a USB/success message to ensure
 text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish

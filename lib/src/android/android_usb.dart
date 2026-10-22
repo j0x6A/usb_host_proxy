@@ -95,6 +95,7 @@ Future<T> _call<T>(
 /// Decodes a non-null boxed Boolean without retaining its temporary typed view.
 bool _boolean(JObject? value) =>
     value!.as(JBoolean.type).use((v) => v.booleanValue());
+
 /// Decodes an optional callback string; [_call] releases the incoming reference.
 String? _resultString(JObject? value) =>
     value?.as(JString.type).use((v) => v.toDartString());
@@ -106,8 +107,10 @@ final class AndroidUsb {
 
   /// Session JNI reference, released and cleared by the disposed callback.
   j.UsbHostProxy$Session? _reference;
+
   /// Live attachment notifications, dropped when no Dart listener is present.
   final _attached = StreamController<UsbDevice>.broadcast();
+
   /// Retired attachment notifications; descriptor references remain readable.
   final _detached = StreamController<UsbDevice>.broadcast();
 
@@ -169,6 +172,7 @@ final class AndroidUsb {
 
   /// Broadcast attach stream; previously observed devices are not replayed.
   Stream<UsbDevice> get deviceAttached => _attached.stream;
+
   /// Broadcast detach stream for invalidated attachment wrappers.
   Stream<UsbDevice> get deviceDetached => _detached.stream;
 
@@ -248,6 +252,7 @@ final class AndroidUsb {
 final class _AndroidDevice implements UsbDevice {
   /// Canonical Java attachment wrapper, including its private UUID and owner.
   final j.UsbHostProxy$Device handle;
+
   /// Original Android descriptor object, not a copy of its fields.
   final j.UsbDevice native;
 
@@ -293,6 +298,7 @@ final class _AndroidDevice implements UsbDevice {
 final class _AndroidConfiguration implements UsbConfiguration {
   /// Escaping framework configuration reference, managed by the native finalizer.
   final j.UsbConfiguration native;
+
   /// Retains the supplied reference without copying descriptor values.
   _AndroidConfiguration(this.native);
   @override
@@ -316,6 +322,7 @@ final class _AndroidConfiguration implements UsbConfiguration {
 final class _AndroidInterface implements UsbInterface {
   /// Original interface reference, also used for native ownership validation.
   final j.UsbInterface native;
+
   /// Retains the supplied reference without copying descriptor values.
   _AndroidInterface(this.native);
   @override
@@ -341,6 +348,7 @@ final class _AndroidInterface implements UsbInterface {
 final class _AndroidEndpoint implements UsbEndpoint {
   /// Escaping framework endpoint reference, managed by the native finalizer.
   final j.UsbEndpoint native;
+
   /// Retains the supplied reference without copying descriptor values.
   _AndroidEndpoint(this.native);
   @override
@@ -366,6 +374,7 @@ final class _AndroidEndpoint implements UsbEndpoint {
 final class _AndroidConnection implements UsbDeviceConnection {
   /// Java connection owner; not a raw file descriptor or descriptor snapshot.
   final j.UsbHostProxy$Connection native;
+
   /// Retains the reference produced by casting a Java completion result.
   _AndroidConnection(this.native);
 
@@ -383,6 +392,7 @@ final class _AndroidConnection implements UsbDeviceConnection {
 
   @override
   Future<int> getFileDescriptor() async => _java(native.fileDescriptor);
+
   /// Copies the returned Java byte array into Dart memory, then releases it.
   /// This does not perform an extra USB control transfer.
   @override
