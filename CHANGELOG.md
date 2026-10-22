@@ -26,6 +26,8 @@
   to the end and provide Clear directly below the 330-pixel console.
 - Stabilize diagnostic sections across USB states with reserved status/error rows
   and independently scrollable raw/descriptor panels; test geometry and lifecycle.
+- Enlarge the descriptor tree panel to 300 pixels, place it before interface
+  controls and label the diagnostic console Log.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing

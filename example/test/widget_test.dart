@@ -631,7 +631,13 @@ void main() {
       }
 
       expect(initial['raw-panel']!.height, 80);
-      expect(initial['descriptor-panel']!.height, 240);
+      expect(initial['descriptor-panel']!.height, 300);
+      expect(
+        initial['descriptor-panel']!.bottom,
+        lessThanOrEqualTo(initial['interface-controls']!.top),
+      );
+      expect(find.text('Log'), findsOneWidget);
+      expect(find.text('Diagnostics (oldest first)'), findsNothing);
       expect(find.text('File descriptor: '), findsOneWidget);
       expect(find.text('Raw descriptors: '), findsOneWidget);
       expect(find.text('Descriptors: —'), findsOneWidget);
@@ -1165,6 +1171,7 @@ class FakeConnection implements UsbDeviceConnection {
   Future<bool> Function()? onClaim;
   Future<bool> Function()? onRelease;
   Future<int> Function()? onFileDescriptor;
+
   /// Supplies long panel contents without invoking USB transport or JNI.
   Future<Uint8List?> Function()? onRawDescriptors;
   bool releaseResult = true;
@@ -1223,6 +1230,7 @@ class FakeDevice implements UsbDevice {
 
   /// Independent optional-string failure, leaving VID/PID readable.
   bool productError = false;
+
   /// Optional long display text for geometry tests, not cached production metadata.
   String? productName;
 
@@ -1295,6 +1303,7 @@ class FakeInterface implements UsbInterface {
 
   /// Interface number; test descriptors may deliberately share it.
   final int number;
+
   /// Simulates a getter failure while the interface controls must stay mounted.
   bool descriptorError = false;
   @override

@@ -811,11 +811,9 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               ),
             ),
             const SizedBox(height: 12),
-            _interfaceControls(),
-            const Divider(),
             SizedBox(
               key: const Key('descriptor-panel'),
-              height: 240,
+              height: 300,
               child: SingleChildScrollView(
                 key: const Key('descriptor-scroll'),
                 controller: _descriptorScroll,
@@ -826,7 +824,9 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
               ),
             ),
             const Divider(),
-            const Text('Diagnostics (oldest first)'),
+            _interfaceControls(),
+            const Divider(),
+            const Text('Log'),
             Container(
               key: const Key('console-panel'),
               height: 330,

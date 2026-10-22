@@ -64,12 +64,13 @@ values and enabled callbacks. Status/error rows reserve 24 logical pixels each;
 long text is ellipsized and its tooltip exposes the complete value. Unavailable
 values use placeholders, while FD/raw values are blank until read.
 
-Raw descriptors have an 80-pixel panel and the descriptor tree a 240-pixel panel,
-each with independent scrolling. Their contents, including errors and long
-descriptor strings, do not move subsequent sections. The console remains 330
-pixels high. These three scroll controllers belong to the screen and are not
-recreated on selection, Open/Close or attach/detach. The page still scrolls as
-a whole; controls need not fit simultaneously on a phone screen.
+Raw descriptors have an 80-pixel panel and the descriptor tree a 300-pixel panel
+above the interface controls. Each panel scrolls independently. Their contents,
+including errors and long descriptor strings, do not move subsequent sections.
+The console remains 330 pixels high and is labeled **Log**. These three scroll
+controllers belong to the screen and are not recreated on selection, Open/Close
+or attach/detach. The page still scrolls as a whole; controls need not fit
+simultaneously on a phone screen.
 
 Interface descriptor failures leave the selector, Force and Claim/Release
 controls in place but disable unsafe callbacks. This affects presentation only,
