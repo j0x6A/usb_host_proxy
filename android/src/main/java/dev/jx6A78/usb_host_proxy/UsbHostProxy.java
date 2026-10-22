@@ -511,6 +511,8 @@ public final class UsbHostProxy {
 
     /**
      * Owns one framework connection, bound permanently to one attachment wrapper.
+     * Descriptor origin and lifecycle are validated here; Android/kernel decide
+     * interface claim and setting policy. No claim or alternate-setting history is kept.
      *
      * <p>Lifecycle changes acquire the session monitor before readLock. Synchronous
      * reads use readLock alone; native close also uses it. Accepted management work
@@ -533,16 +535,6 @@ public final class UsbHostProxy {
         private boolean closed = false;
         /** Close callers awaiting the same queued close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
-        /** Last returned ownership result, not a live query of kernel state. */
-        private enum InterfaceState { UNCLAIMED, CLAIMED, UNKNOWN }
-        /** Queue-owned observations shared by alternate settings with the same number. */
-        private final Map<Integer, InterfaceState> interfaces = new HashMap<>();
-        /**
-         * Number of outstanding releases per interface, guarded by the session monitor.
-         * Counts include queued work: settling one release must not remove the barrier
-         * of another release already accepted for the same interface number.
-         */
-        private final Map<Integer, Integer> pendingReleases = new HashMap<>();
 
         /** Takes ownership of a successfully opened native connection. */
         private Connection(Session owner, Device device, UsbDeviceConnection connection) {
@@ -578,49 +570,17 @@ public final class UsbHostProxy {
          * An operation already inside a native call is not forcibly interrupted.
          */
         private void submit(Completion completion, Callable<Object> operation) {
-            submit(completion, operation, null, false);
-        }
-
-        /**
-         * Validates descriptors before installing a release admission barrier.
-         * A null interface denotes connection-wide work. Non-release interface work
-         * is rejected while releases are outstanding; its ownership state is checked
-         * later on the FIFO queue, after earlier claims/releases have returned.
-         * Every queued release removes its barrier before delivering success/error,
-         * including a release invalidated by detach before native execution.
-         */
-        private void submit(Completion completion, Callable<Object> operation,
-                            UsbInterface intf, boolean releasing) {
             synchronized (owner) {
                 Call call = new Call(owner, completion);
                 synchronized (readLock) {
                     if (closing) { call.finish(null, new IllegalStateException("USB connection is closed or detached")); return; }
-                    final Integer id;
-                    try {
-                        if (intf != null) checkInterface(intf);
-                        id = intf == null ? null : intf.getId();
-                        if (id != null && !releasing && pendingReleases.containsKey(id)) {
-                            throw new IllegalStateException("USB interface release is pending");
-                        }
-                    } catch (Throwable error) { call.finish(null, error); return; }
-                    if (releasing) pendingReleases.merge(id, 1, Integer::sum);
                     queue.execute(() -> {
-                        Object result = null;
-                        Throwable failure = null;
                         try {
                             // Explicit close drains accepted work; detach/session end
                             // invalidates queued work before it touches the device.
                             synchronized (owner) { owner.checkDevice(device); }
-                            result = operation.call();
-                        } catch (Throwable error) { failure = error; }
-                        synchronized (owner) {
-                            if (releasing) {
-                                int remaining = pendingReleases.get(id) - 1;
-                                if (remaining == 0) pendingReleases.remove(id);
-                                else pendingReleases.put(id, remaining);
-                            }
-                            call.finish(result, failure);
-                        }
+                            call.finish(operation.call(), null);
+                        } catch (Throwable error) { call.finish(null, error); }
                     });
                 }
             }
@@ -639,63 +599,36 @@ public final class UsbHostProxy {
             throw new IllegalArgumentException("Interface belongs to another device attachment");
         }
 
-        /** Queue-only state; absence means initial, released or configuration-invalidated. */
-        private InterfaceState interfaceState(UsbInterface intf) {
-            return interfaces.getOrDefault(intf.getId(), InterfaceState.UNCLAIMED);
-        }
-
-        /** Requires UNCLAIMED; only native true establishes CLAIMED. Force is not a guarantee. */
+        /** Validates the original descriptor and forwards claim/force, preserving Android's result. */
         public void claim(UsbInterface intf, boolean force, Completion completion) {
             submit(completion, () -> {
-                if (interfaceState(intf) != InterfaceState.UNCLAIMED) {
-                    throw new IllegalStateException("USB interface is already claimed or UNKNOWN");
-                }
-                boolean claimed = connection.claimInterface(intf, force);
-                if (claimed) interfaces.put(intf.getId(), InterfaceState.CLAIMED);
-                return claimed;
-            }, intf, false);
+                checkInterface(intf);
+                return connection.claimInterface(intf, force);
+            });
         }
 
-        /** Rejects UNCLAIMED. Only returned native false establishes UNKNOWN. */
+        /** Forwards release without requiring a prior claim or recording ownership history. */
         public void release(UsbInterface intf, Completion completion) {
             submit(completion, () -> {
-                if (interfaceState(intf) == InterfaceState.UNCLAIMED) {
-                    throw new IllegalStateException("USB interface is UNCLAIMED");
-                }
-                // The admission barrier is separate from the last returned state.
-                // Exceptions are errors, not evidence of a native false result.
-                boolean released = connection.releaseInterface(intf);
-                if (released) interfaces.remove(intf.getId());
-                else interfaces.put(intf.getId(), InterfaceState.UNKNOWN);
-                return released;
-            }, intf, true);
+                checkInterface(intf);
+                return connection.releaseInterface(intf);
+            });
         }
 
-        /** Requires CLAIMED at execution; selecting an alternate setting does not change ownership. */
+        /** Forwards the alternate-setting request; Android decides whether it is allowed. */
         public void selectInterface(UsbInterface intf, Completion completion) {
             submit(completion, () -> {
-                if (interfaceState(intf) != InterfaceState.CLAIMED) {
-                    throw new IllegalStateException("USB interface must be CLAIMED");
-                }
+                checkInterface(intf);
                 return connection.setInterface(intf);
-            }, intf, false);
+            });
         }
 
-        /**
-         * Validates the original configuration and rejects unresolved UNKNOWN states.
-         * Only native true invalidates all recorded claims; false/errors retain the
-         * last observations. No implicit release or recovery calls are performed.
-         */
+        /** Validates the original configuration and forwards the native result without local policy. */
         public void selectConfiguration(UsbConfiguration configuration, Completion completion) {
             submit(completion, () -> {
                 for (int i = 0; i < device.usbDevice.getConfigurationCount(); i++) {
                     if (device.usbDevice.getConfiguration(i) == configuration) {
-                        if (interfaces.containsValue(InterfaceState.UNKNOWN)) {
-                            throw new IllegalStateException("Release UNKNOWN interfaces or close before selecting configuration");
-                        }
-                        boolean selected = connection.setConfiguration(configuration);
-                        if (selected) interfaces.clear();
-                        return selected;
+                        return connection.setConfiguration(configuration);
                     }
                 }
                 throw new IllegalArgumentException("Configuration belongs to another device attachment");
@@ -707,7 +640,7 @@ public final class UsbHostProxy {
          * A null completion is used by lifecycle cleanup. Already-closed calls succeed;
          * a failure from the first native close attempt is not replayed to later callers.
          * No interface releases are issued here. The connection stays unusable even
-         * on native close failure; discarding observations does not create UNKNOWN.
+         * on native close failure.
          */
         public void close(Completion completion) {
             synchronized (owner) {
@@ -725,7 +658,6 @@ public final class UsbHostProxy {
                             synchronized (readLock) { connection.close(); }
                         } catch (Throwable failure) { error = failure; }
                         synchronized (owner) {
-                            interfaces.clear();
                             synchronized (readLock) { connection = null; closed = true; }
                             owner.connections.remove(this);
                             for (Call waiter : closeWaiters) waiter.finish(null, error);

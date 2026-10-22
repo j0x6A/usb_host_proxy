@@ -15,10 +15,13 @@
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
 - Provide a launcher/USB-started diagnostic example with its own namespace
   and fake-backed widget tests, without data transfers.
-- Track UNCLAIMED/CLAIMED/UNKNOWN per connection/interface number; enforce
-  claim/release transitions and release admission barriers without implicit recovery.
+- Delegate interface claim/release and setting selection to Android/kernel,
+  preserving native results and exceptions without local ownership tracking
+  or release-specific admission barriers.
 - Add explicit None selectors, force claim and a chronological terminal-style
   console to the example; opt only the diagnostic app into all-device USB launch.
+- Give console categories fixed colors: cyan USB events, green success, amber
+  negative results, red errors and gray information, with widget coverage.
 - Document source responsibilities, reference ownership, synchronization,
   attachment lifecycle and operation/error contracts without changing behavior.
 - Handle USB Activity launch/new intents through ActivityAware and the existing

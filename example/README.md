@@ -30,8 +30,8 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    the selected attachment when no operation is pending.
 2. Both dropdowns initially select **None**. Select a device to see its name,
    VID/PID, product/manufacturer and descriptor tree: configurations, interface
-   alternate settings and endpoints. The tree
-   is descriptive; the app does not select configurations or alternate settings.
+   alternate settings and endpoints. The tree is descriptive; the app does not
+   select configurations or alternate settings.
    Attach never selects a device. Device **None** clears selection and closes
    the previous connection through the public API. The interface remains None
    after device selection and Open; choose it explicitly before Claim/Release.
@@ -45,21 +45,32 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
 5. Choose an interface descriptor and use **Claim** / **Release**. **Force claim**
    defaults OFF and is passed unchanged; ON does not guarantee success. Selecting
    another interface or interface None neither releases nor selects alternate
-   settings. Several interfaces can stay claimed until explicit Release/Close.
-   State is by interface number (alternate settings share it) and connection:
-   UNCLAIMED permits Claim; native true records CLAIMED, false stays UNCLAIMED.
-   CLAIMED permits Release; true records UNCLAIMED, false records UNKNOWN.
-   UNKNOWN permits retrying Release or Close, never Claim. The driver independently
-   enforces these rules. The UI records returned results, not global OS ownership.
-   Exceptions are displayed and do not pretend to be native false; the UI retains
-   its last observation, which may be stale after an exceptional native release.
+   settings. Both buttons are available whenever a connection is open, an
+   interface is selected and no UI operation/cleanup is pending. Every click calls
+   the plugin, including repeated Claim and Release without prior Claim. The
+   console displays native true/false or an exception; neither the UI nor the
+   library records ownership history or infers claim state from earlier results.
+   Android/kernel decide what each call can do. An exception is never shown as false.
 6. **Close** releases the connection. Unsupported actions are disabled. The log
    retains the latest 40 operation results, events and failures. Close calls native
    close, not individual releases, and permanently invalidates the connection.
 
-The console is oldest-first on a dark background with monospace text: gray
-information, green success, yellow warnings/false results and red errors. It has
-independent scrolling, follows new entries only at the tail (24-pixel tolerance),
+The console is oldest-first on a dark background with monospace text. Colors
+come from an explicit message category, never from matching words in its text:
+
+| Category | Color | ARGB |
+| --- | --- | --- |
+| Attached and Detached | Cyan | `0xFF55D9EF` |
+| Successful operation | Green | `0xFF45D483` |
+| False or failure without an exception | Amber | `0xFFF6BE55` |
+| Exception/error | Red | `0xFFFF7070` |
+| Ordinary information | Gray | `0xFFAAAAAA` |
+
+Both USB events always use cyan. A null Open result, invalid file descriptor or
+null raw-descriptor result uses amber; readable connection metadata uses green.
+These colors describe the returned operation result, not cached interface ownership.
+
+The console has independent scrolling, follows new entries only at the tail (24-pixel tolerance),
 and stops following while older entries are being read. Entries beyond the last
 40 are discarded, including entries currently being read.
 
@@ -80,8 +91,7 @@ starts cleanup, but Flutter's synchronous dispose cannot await native futures.
 An in-flight completion retains responsibility for closing any late connection.
 Cleanup errors after disposal go to the debug log; failures while visible go to
 the diagnostics log. A close failure reports unconfirmed native cleanup, but
-the connection remains unusable, not UNKNOWN. Abrupt process termination cannot
-await Dart cleanup.
+the connection remains unusable. Abrupt process termination cannot await Dart cleanup.
 
 The UI action gate is deliberately screen-wide: it prevents opening another
 connection before previous action/cleanup futures settle. It is separate from
@@ -103,10 +113,12 @@ passed to Claim/Release, not the active configuration or alternate setting.
   result-acceptance rule, not a replacement for the plugin's attachment UUID.
 - `_deviceLabel`, `_descriptorDetails` and `_interfaceControls` render public API
   data and local operation results; they do not open devices while building.
-- `_interfaceStates` contains only returned operation results for presentation.
-  `_interfaceOperation` never converts exceptions into false; Java independently
-  validates ownership and the state machine. `_forceClaim` is only user input.
-- `_log` appends severity-colored entries and schedules tail following after
+- `_interfaceOperation` invokes the chosen method and logs the returned boolean;
+  `_run` reports exceptions without converting them to false. Java validates
+  descriptor ownership and lifecycle, leaving claim policy to Android.
+  `_forceClaim` is only user input.
+- `_LogLevel` distinguishes USB events, successes, negative results, exceptions
+  and ordinary information. `_log` appends category-colored entries and follows the tail after
   layout; `_consoleScroll` is disposed with the screen. No log stream or replay
   service is added to the plugin.
 - `test/widget_test.dart`: fake public interfaces and controlled-future scenarios.
@@ -118,10 +130,12 @@ passed to Claim/Release, not the active configuration or alternate setting.
 It covers automatic/manual/event discovery, empty state, permission decisions,
 descriptor display, open/null/errors, claim/release results, selection cleanup,
 out-of-order results, same-name replacement after detach and screen disposal,
-None/Force behavior, per-interface observations and console history/scrolling.
+None/Force behavior, repeated Claim/Release, all five console color categories
+and console history/scrolling. Color tests include exception text resembling a
+USB/success message to ensure text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
-hardware correctness. Java unit tests cover the driver's state machine and
-admission barriers independently of the UI.
+hardware correctness. Java unit tests check native result/error forwarding,
+descriptor validation, ordering and lifecycle independently of the UI.
 
 With dependencies and Android tooling already available, run from `example/`:
 
@@ -153,5 +167,5 @@ two-device selection changes, interface ownership, native raw descriptors and
 screen/engine teardown. Also check USB chooser/default selection, clearing a
 default, cold/warm USB launches, duplicate Intent/broadcast delivery, force claim
 with a kernel-owned interface and release failures. Device class policy may require
-application-level permissions (for example CAMERA for video devices); the example does not request
-those automatically. See the [plugin README](../README.md) for API contracts.
+application-level permissions (for example CAMERA for video devices); the example
+does not request those automatically. See the [plugin README](../README.md) for API contracts.

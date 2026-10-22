@@ -3,11 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:usb_host_proxy/usb_host_proxy.dart';
 
-/// Local observations only; the Android connection enforces the actual contract.
-enum _InterfaceState { unclaimed, claimed, unknown }
-
-/// Console presentation severity; there is no separate library logging backend.
-enum _LogLevel { info, success, warning, error }
+/// Explicit console category; USB events are independent of operation outcomes.
+enum _LogLevel { info, usbEvent, success, warning, error }
 
 /// Uses the real public manager in the Android engine's root isolate.
 void main() => runApp(UsbDiagnosticsApp());
@@ -52,10 +49,6 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
 
   /// The sole published connection; cleared before cleanup hands it to a future.
   UsbDeviceConnection? _connection;
-
-  /// Last returned results by interface number, not a native ownership registry.
-  /// Missing entries mean UNCLAIMED; selection/close clears all observations.
-  final Map<int, _InterfaceState> _interfaceStates = {};
 
   /// Explicit user preference; forwarded only by Claim and never auto-enabled.
   bool _forceClaim = false;
@@ -128,6 +121,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   }
 
   /// Appends visible results, or sends cleanup messages to debug output after disposal.
+  /// Category alone determines color; text and prior USB results are not inspected.
   /// Follows only the tail; a user scroll before layout cancels that append's jump.
   void _log(String message, [_LogLevel level = _LogLevel.info]) {
     if (!_alive) {
@@ -138,10 +132,11 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     final follow =
         !_consoleScroll.hasClients || _consoleScroll.position.extentAfter <= 24;
     final color = switch (level) {
-      _LogLevel.info => Colors.white70,
-      _LogLevel.success => Colors.greenAccent,
-      _LogLevel.warning => Colors.yellowAccent,
-      _LogLevel.error => Colors.redAccent,
+      _LogLevel.info => const Color(0xFFAAAAAA),
+      _LogLevel.usbEvent => const Color(0xFF55D9EF),
+      _LogLevel.success => const Color(0xFF45D483),
+      _LogLevel.warning => const Color(0xFFF6BE55),
+      _LogLevel.error => const Color(0xFFFF7070),
     };
     setState(() {
       _messages.add((text: message, color: color));
@@ -164,10 +159,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     if (!_alive) return;
     try {
       final name = device.getDeviceName();
-      _log(
-        '${attached ? 'Attached' : 'Detached'}: $name',
-        attached ? _LogLevel.info : _LogLevel.warning,
-      );
+      _log('${attached ? 'Attached' : 'Detached'}: $name', _LogLevel.usbEvent);
       if (!attached) {
         setState(() => _devices.remove(name));
         // Public adapters are not identity tokens. Never compare Dart wrappers
@@ -194,7 +186,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       if (!_alive || scan != _scanVersion) return;
       setState(() => _devices = Map.of(found));
       if (_selectedName != null && !found.containsKey(_selectedName)) {
-        _log('Selected device is no longer present', _LogLevel.warning);
+        _log('Selected device is no longer present', _LogLevel.info);
         _select(null);
       }
       // Keep the attachment wrapper across continuous enumeration, even when
@@ -227,7 +219,6 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       _connection = null;
       _interfaces = [];
       _interfaceIndex = null;
-      _interfaceStates.clear();
       _permission = null;
       _checkingPermission = false;
       _connectionState = 'Closed';
@@ -381,7 +372,6 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     setState(() {
       _connection = null;
       _connectionState = 'Closing…';
-      _interfaceStates.clear();
       _fileDescriptor = null;
       _rawDescriptors = null;
     });
@@ -403,6 +393,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
 
   /// Reads connection metadata, not USB transport; publishes only a complete pair.
   /// A change between the two awaits prevents further access to the old handle.
+  /// Missing/invalid metadata changes only the log category, not the native result.
   Future<void> _readConnection() => _run('Read connection', (version) async {
     final connection = _connection;
     if (connection == null) return;
@@ -423,39 +414,27 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     });
     _log(
       'Read connection: fd=$fd, raw=${raw?.length ?? 'null'}',
-      _LogLevel.success,
+      fd >= 0 && raw != null ? _LogLevel.success : _LogLevel.warning,
     );
   });
 
-  /// Mirrors returned booleans. Exceptions are logged, never invented as false.
-  /// Native enforcement remains authoritative, even if a local observation is stale.
-  Future<void> _interfaceOperation({
-    required bool claim,
-  }) => _run(claim ? 'Claim' : 'Release', (version) async {
-    final connection = _connection;
-    final index = _interfaceIndex;
-    if (connection == null || index == null) return;
-    final intf = _interfaces[index];
-    final id = intf.getId();
-    final state = _interfaceStates[id] ?? _InterfaceState.unclaimed;
-    if (claim
-        ? state != _InterfaceState.unclaimed
-        : state == _InterfaceState.unclaimed) {
-      return;
-    }
-    final success = claim
-        ? await connection.claimInterface(intf, force: _forceClaim)
-        : await connection.releaseInterface(intf);
-    if (!_current(version) || !identical(connection, _connection)) return;
-    final next = claim
-        ? (success ? _InterfaceState.claimed : _InterfaceState.unclaimed)
-        : (success ? _InterfaceState.unclaimed : _InterfaceState.unknown);
-    setState(() => _interfaceStates[id] = next);
-    _log(
-      '${claim ? 'Claim' : 'Release'} interface $id: $success → ${next.name.toUpperCase()}',
-      success ? _LogLevel.success : _LogLevel.warning,
-    );
-  });
+  /// Calls the selected operation each time; results/errors are logged, not cached.
+  Future<void> _interfaceOperation({required bool claim}) =>
+      _run(claim ? 'Claim' : 'Release', (version) async {
+        final connection = _connection;
+        final index = _interfaceIndex;
+        if (connection == null || index == null) return;
+        final intf = _interfaces[index];
+        final id = intf.getId();
+        final success = claim
+            ? await connection.claimInterface(intf, force: _forceClaim)
+            : await connection.releaseInterface(intf);
+        if (!_current(version) || !identical(connection, _connection)) return;
+        _log(
+          '${claim ? 'Claim' : 'Release'} interface $id: $success',
+          success ? _LogLevel.success : _LogLevel.warning,
+        );
+      });
 
   /// Settles subscription cleanup errors without an unhandled dispose-time future.
   Future<void> _cancel(StreamSubscription<UsbDevice>? subscription) async {
@@ -561,13 +540,12 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     }
   }
 
-  /// Distinguishes descriptor index/alternate setting from connection claim ID.
+  /// Selects original descriptors without performing or tracking interface claims.
   Widget _interfaceControls() {
     try {
       final id = _interfaceIndex == null
           ? null
           : _interfaces[_interfaceIndex!].getId();
-      final state = _interfaceStates[id] ?? _InterfaceState.unclaimed;
       final usable = _idle && _connection != null && id != null;
       final selection = _selectionVersion;
       return Column(
@@ -606,10 +584,10 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
           Text(
             id == null
                 ? 'No interface selected'
-                : 'Interface $id: ${_connection == null ? 'no open connection' : state.name.toUpperCase()}',
+                : 'Interface $id: ${_connection == null ? 'no open connection' : 'selected'}',
           ),
           const Text(
-            'Last observed state on this connection; the driver enforces operations.',
+            'Claim/Release results are shown in the console; Android manages ownership.',
           ),
           SwitchListTile(
             key: const Key('force'),
@@ -624,14 +602,14 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
             children: [
               ElevatedButton(
                 key: const Key('claim'),
-                onPressed: usable && state == _InterfaceState.unclaimed
+                onPressed: usable
                     ? () => _interfaceOperation(claim: true)
                     : null,
                 child: const Text('Claim'),
               ),
               ElevatedButton(
                 key: const Key('release'),
-                onPressed: usable && state != _InterfaceState.unclaimed
+                onPressed: usable
                     ? () => _interfaceOperation(claim: false)
                     : null,
                 child: const Text('Release'),

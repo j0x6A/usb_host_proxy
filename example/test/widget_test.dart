@@ -132,34 +132,40 @@ void main() {
       await press(tester, 'read');
       expect(find.text('File descriptor: 42'), findsOneWidget);
       expect(find.textContaining('3 bytes: 01 02 ff'), findsOneWidget);
+      // Release is offered before Claim; its actual result is not inferred by UI.
+      connection.releaseResult = false;
+      await press(tester, 'release');
+      expect(find.text('Release interface 0: false'), findsOneWidget);
+      expect(connection.claims, 0);
       connection.claimResult = false;
       await press(tester, 'claim');
-      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      expect(find.text('Claim interface 0: false'), findsOneWidget);
       expect(enabled(tester, 'claim'), isTrue);
+      expect(enabled(tester, 'release'), isTrue);
       connection.claimResult = true;
       await press(tester, 'claim');
       expect(connection.lastInterface, same(first.interfaces[0]));
       expect(connection.lastForce, isFalse);
-      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
-      expect(enabled(tester, 'claim'), isFalse);
-      // Alternate settings share the same interface-number ownership state.
+      expect(enabled(tester, 'claim'), isTrue);
+      await press(tester, 'claim');
+      expect(connection.claims, 3);
+      // Selecting an alternate descriptor never performs an implicit USB operation.
       tester
           .widget<DropdownButton<int>>(find.byKey(const Key('interfaces')))
           .onChanged!(1);
       await tester.pumpAndSettle();
-      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
-      connection.releaseResult = false;
+      expect(connection.claims, 3);
+      expect(connection.releases, 1);
       await press(tester, 'release');
-      expect(find.text('Interface 0: UNKNOWN'), findsOneWidget);
-      expect(enabled(tester, 'claim'), isFalse);
+      expect(enabled(tester, 'claim'), isTrue);
       expect(enabled(tester, 'release'), isTrue);
       await press(tester, 'release');
-      expect(find.text('Interface 0: UNKNOWN'), findsOneWidget);
+      expect(connection.releases, 3);
       connection.releaseResult = true;
       await press(tester, 'release');
       expect(connection.lastInterface, same(first.interfaces[1]));
-      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
-      expect(enabled(tester, 'release'), isFalse);
+      expect(find.text('Release interface 0: true'), findsOneWidget);
+      expect(enabled(tester, 'release'), isTrue);
       await press(tester, 'close');
       expect(connection.closes, 1);
       expect(find.text('Connection: Closed'), findsOneWidget);
@@ -305,7 +311,7 @@ void main() {
   );
 
   testWidgets(
-    'Detach invalidates claims even if the same name returns before completion',
+    'Detach discards late Claim results even if the same name returns before completion',
     (tester) async {
       manager.permissions['A'] = true;
       final claimed = Completer<bool>();
@@ -339,7 +345,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(connection.closes, 1);
       expect(find.text('Connection: Closed'), findsOneWidget);
-      expect(find.text('Interface 0: CLAIMED'), findsNothing);
+      expect(find.text('Claim interface 0: true'), findsNothing);
       expect(enabled(tester, 'release'), isFalse);
     },
   );
@@ -452,7 +458,9 @@ void main() {
       expect(enabled(tester, 'claim'), isFalse);
       expect(enabled(tester, 'release'), isFalse);
       await selectInterface(tester, 1);
-      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      expect(find.text('Interface 0: selected'), findsOneWidget);
+      expect(connection.claims, 1);
+      expect(connection.releases, 0);
       await select(tester, '');
       expect(find.text('No device selected'), findsOneWidget);
       expect(connection.closes, 1);
@@ -474,7 +482,7 @@ void main() {
   );
 
   testWidgets(
-    'Force forwards user choice without guaranteeing Claim; interface states are separate',
+    'Force forwards user choice and native results never lock out Claim or Release',
     (tester) async {
       second.interfaces.add(FakeInterface(0, number: 1));
       await launch(tester);
@@ -489,31 +497,43 @@ void main() {
       connection.claimResult = false;
       await press(tester, 'claim');
       expect(connection.lastForce, isTrue);
-      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      expect(find.text('Claim interface 0: false'), findsOneWidget);
+      expect(enabled(tester, 'release'), isTrue);
       connection.claimResult = true;
       await press(tester, 'claim');
       await selectInterface(tester, 2);
-      expect(find.text('Interface 1: UNCLAIMED'), findsOneWidget);
+      expect(find.text('Interface 1: selected'), findsOneWidget);
+      expect(connection.claims, 2);
       expect(connection.releases, 0);
       await press(tester, 'claim');
       connection.releaseResult = false;
       await press(tester, 'release');
-      expect(find.text('Interface 1: UNKNOWN'), findsOneWidget);
+      expect(find.text('Release interface 1: false'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isTrue);
       await selectInterface(tester, 1);
-      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      expect(find.text('Interface 0: selected'), findsOneWidget);
       connection.onRelease = () async => throw StateError('release validation');
       await press(tester, 'release');
-      expect(find.text('Interface 0: CLAIMED'), findsOneWidget);
+      expect(enabled(tester, 'claim'), isTrue);
+      expect(enabled(tester, 'release'), isTrue);
       expect(
         find.textContaining('Release failed: Bad state: release validation'),
         findsOneWidget,
       );
+      connection.onClaim = () async => throw StateError('native claim');
+      await press(tester, 'claim');
+      expect(
+        find.textContaining('Claim failed: Bad state: native claim'),
+        findsOneWidget,
+      );
+      expect(enabled(tester, 'claim'), isTrue);
+      expect(enabled(tester, 'release'), isTrue);
       await press(tester, 'close');
       expect(connection.closes, 1);
       await press(tester, 'open');
       expect(find.text('No interface selected'), findsOneWidget);
       await selectInterface(tester, 0);
-      expect(find.text('Interface 0: UNCLAIMED'), findsOneWidget);
+      expect(find.text('Interface 0: selected'), findsOneWidget);
     },
   );
 
@@ -536,6 +556,92 @@ void main() {
       expect(manager.opens, 0);
       expect(manager.requests, 0);
       expect(connection.claims, 0);
+    },
+  );
+
+  testWidgets(
+    'Console colors distinguish USB events, results, errors and information',
+    (tester) async {
+      await launch(tester);
+
+      /// Reads the rendered entry, rather than reproducing the production category map.
+      Color? logColor(String message) => tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('console')),
+              matching: find.text(message),
+            ),
+          )
+          .style!
+          .color;
+
+      manager.attached.add(first);
+      manager.detached.add(second);
+      await tester.pumpAndSettle();
+      expect(logColor('Attached: A'), const Color(0xFF55D9EF));
+      expect(logColor('Detached: B'), const Color(0xFF55D9EF));
+
+      await select(tester, 'A');
+      await press(tester, 'permission');
+      expect(
+        logColor('Request Permission: not granted (denied or detached)'),
+        const Color(0xFFF6BE55),
+      );
+      manager.requestResult = true;
+      await press(tester, 'permission');
+      expect(logColor('Request Permission: granted'), const Color(0xFF45D483));
+
+      manager.onOpen = (_) async => null;
+      await press(tester, 'open');
+      expect(
+        logColor('Open returned null; no connection was created'),
+        const Color(0xFFF6BE55),
+      );
+      manager.onOpen = (_) async => connection;
+      await press(tester, 'open');
+      expect(logColor('Open: connected'), const Color(0xFF45D483));
+      await press(tester, 'read');
+      expect(
+        logColor('Read connection: fd=42, raw=3'),
+        const Color(0xFF45D483),
+      );
+      connection.onFileDescriptor = () async => -1;
+      await press(tester, 'read');
+      expect(
+        logColor('Read connection: fd=-1, raw=3'),
+        const Color(0xFFF6BE55),
+      );
+
+      await selectInterface(tester, 0);
+      connection.claimResult = false;
+      await press(tester, 'claim');
+      expect(logColor('Claim interface 0: false'), const Color(0xFFF6BE55));
+      connection.claimResult = true;
+      await press(tester, 'claim');
+      expect(logColor('Claim interface 0: true'), const Color(0xFF45D483));
+      connection.releaseResult = false;
+      await press(tester, 'release');
+      expect(logColor('Release interface 0: false'), const Color(0xFFF6BE55));
+      connection.releaseResult = true;
+      await press(tester, 'release');
+      expect(logColor('Release interface 0: true'), const Color(0xFF45D483));
+
+      // Words resembling other categories do not override the explicit error category.
+      connection.onClaim = () async => throw StateError('Attached: true');
+      await press(tester, 'claim');
+      expect(
+        logColor('Claim failed: Bad state: Attached: true'),
+        const Color(0xFFFF7070),
+      );
+      await press(tester, 'close');
+      expect(logColor('Close: closed'), const Color(0xFF45D483));
+
+      manager.devices.remove('A');
+      await press(tester, 'refresh');
+      expect(
+        logColor('Selected device is no longer present'),
+        const Color(0xFFAAAAAA),
+      );
     },
   );
 
@@ -564,7 +670,7 @@ void main() {
     expect(lines.first.data, 'Attached: event-0');
     expect(lines.last.data, 'Attached: event-24');
     expect(lines.first.style!.fontFamily, 'monospace');
-    expect(lines.first.style!.color, Colors.white70);
+    expect(lines.first.style!.color, const Color(0xFF55D9EF));
     expect(scroll.position.extentAfter, closeTo(0, 0.1));
     scroll.jumpTo(0);
     await tester.pump();
@@ -655,7 +761,7 @@ class FakeManager extends UsbManager {
   }
 }
 
-/// Records ownership and arguments; it does not reproduce Android's native queue.
+/// Records calls and arguments, without simulating Android's ownership or native queue.
 /// Unsupported methods deliberately fail rather than silently simulating transport.
 class FakeConnection implements UsbDeviceConnection {
   /// Optional gates keep close/claim/read pending across selection or disposal.
@@ -782,9 +888,11 @@ class FakeConfiguration implements UsbConfiguration {
 /// Alternate-setting fixture; the default number is shared, but tests can add others.
 class FakeInterface implements UsbInterface {
   FakeInterface(this.alt, {this.number = 0});
-  /// Alternate setting selector, independent of connection ownership by number.
+
+  /// Alternate setting selector passed through the original descriptor.
   final int alt;
-  /// Interface number used to test shared or independent ownership observations.
+
+  /// Interface number; test descriptors may deliberately share it.
   final int number;
   @override
   int getId() => number;
