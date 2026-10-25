@@ -1,13 +1,35 @@
 # usb_host_proxy_example
 
-Manual USB Host diagnostics for a physical Android device (API >=28, Android 9) with USB
-Host/OTG support. Start it from the launcher or Android's USB app chooser.
+Manual USB Host diagnostics for a physical Android device running API 28
+(Android 9) or later with USB Host/OTG support.
 Application ID: `dev.jx6A78.usb_host_proxy`. There are no data transfers and
 no Windows implementation.
 
 `minSdk` is explicitly 28; `compileSdk` and `targetSdk` follow the installed
 Flutter SDK through the app's Gradle configuration. This example does not impose
 its target API on applications consuming the plugin.
+
+## Run the example
+
+With Flutter and Android tooling installed, connect the Android device and run
+these commands from `example/`:
+
+```powershell
+flutter pub get
+flutter run
+```
+
+Start the installed app from its launcher icon or Android's USB app chooser.
+The app enumerates automatically, but both selectors start at **None**. It requests
+permission only when you press **Request Permission**. Open, Close, Claim and
+Release also require an explicit click; Android's USB chooser may grant access
+separately, as described below.
+
+Use this screen to inspect descriptors, permissions, connection information and
+Claim/Release results. It has no transfer controls and no controls for setting
+configurations/alternate settings, reading serial numbers or converting names/IDs.
+Those management/information methods remain available in the library; see the
+[API overview and verification limits](../README.md).
 
 ## USB launch and defaults
 
@@ -41,7 +63,7 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    after device selection and Open; choose it explicitly before Claim/Release.
 3. Read the permission status. **Request Permission** is the only app action that
    explicitly requests a USB permission decision; enumeration/selection never does.
-   False means denied or detached; the API does not distinguish those reasons.
+   False means no access was obtained; the API does not distinguish refusal from detach.
 4. **Open** requires a selected, authorized device. **Read FD / raw descriptors**
    reads connection information, not an extra control transfer. The file
    descriptor remains owned by the plugin; do not close or use it externally.
@@ -55,7 +77,8 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    console displays native true/false or an exception; neither the UI nor the
    library records ownership history or infers claim state from earlier results.
    Android/kernel decide what each call can do. An exception is never shown as false.
-6. **Close** releases the connection. Unsupported actions are disabled. The log
+6. **Close** closes the native connection. Buttons that require a device,
+   interface, permission or idle screen are disabled until those conditions hold. The log
    retains operation results, events and failures until Clear or screen disposal.
    Close calls native close, not individual releases, and permanently invalidates
    the connection.
@@ -71,8 +94,8 @@ values use placeholders, while FD/raw values are blank until read.
 Raw descriptors have an 80-pixel panel and the descriptor tree a 300-pixel panel
 above the interface controls. Each panel scrolls independently. Their contents,
 including errors and long descriptor strings, do not move subsequent sections.
-The console remains 330 pixels high and is labeled **Log**. These three scroll
-controllers belong to the screen and are not recreated on selection, Open/Close
+The console is labeled **Log**. All three scroll controllers belong to the screen
+and are not recreated on selection, Open/Close
 or attach/detach. The page still scrolls as a whole; controls need not fit
 simultaneously on a phone screen.
 Independent PageStorage keys restore the raw and descriptor panel offsets when
@@ -106,8 +129,8 @@ chronological and unlimited for the screen's lifetime, so memory use grows with
 the number of messages. Rows are built lazily rather than creating a Text widget
 for every stored entry. This does not isolate screen rebuilds: logging still
 updates the screen state, whose build reads selected-device descriptors.
-**Clear**, directly below the console, empties history
-and resets its scroll position without logging a confirmation or affecting USB
+**Clear**, directly below the console, empties history and resets its scroll
+position without logging a confirmation or affecting USB
 selection, permissions, connections or pending operations. Subsequent messages
 are added normally and again scroll to the end. Only Clear or screen disposal
 removes history; there is no automatic trimming.
@@ -191,19 +214,18 @@ text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor forwarding, parallel execution and lifecycle independently of the UI.
-They cover saved device views after detach, name-based permission coalescing,
+Those Java tests cover saved device views after detach, name-based permission coalescing,
 session-isolated replies and cleanup of opens invalidated by detach/restart,
 including connections opened before rediscovery. No device UUID is involved.
 They also check device/connection serial values and errors, native FD/raw
 descriptor results, rejection after close and permission submission failures.
 Blocked direct FD/raw reads verify that native close waits for their return
 while later reads are rejected. This does not add any operation to the UI.
-This does not cover JNI conversion or native USB behavior. Static name/ID
-conversion, setting configuration/alternate settings and device serial reads
-are library features without dedicated controls in this diagnostic screen.
+This does not cover JNI conversion or native USB behavior. Library features
+without screen controls require a separate caller for manual verification.
 `test/usb_request_test.dart` separately checks the withdrawn transport's public
 UsbRequest placeholders: null/false/no-op results, no native calls and no buffer
-reads or writes. No implemented transport, buffer helper or transfer test remains.
+reads or writes. It does not test a working transport implementation.
 
 With dependencies and Android tooling already available, run from `example/`:
 

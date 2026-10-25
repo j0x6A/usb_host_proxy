@@ -1,5 +1,8 @@
 ## 0.2.0 (unreleased)
 
+- Add a first-use workflow and connection example, separate backend internals
+  into a maintainer's guide, and clarify implemented scope versus test coverage.
+  Correct descriptions that implied active transport or repository visibility.
 - Use Android device names without private device UUIDs, generation checks or
   deviceInstance permission extras. Keep session-isolated callback routes and
   request codes; accept older same-session device views and preserve native results.

@@ -1,38 +1,49 @@
 # usb_host_proxy
 
-Flutter plugin for Android USB Host management through JNI/JNIgen. Android
-integration is written in Java; Dart adapters retain references to the original
-`android.hardware.usb` objects without caching their descriptor fields.
+A Flutter plugin for discovering and managing Android USB Host devices. It can
+read device information, request permission, open connections and manage USB
+interfaces. **It does not transfer application data.**
 
-Version 0.2.0 is in development. The package and repository are private
-(`publish_to: none`). License: BSD-3-Clause, see [LICENSE](LICENSE).
+The Android implementation uses Java and JNI. JNI lets Dart call Android classes;
+JNIgen generates the private bindings for those calls. Dart objects retain
+references to Android USB objects rather than copying their descriptor fields.
 
-## Scope
+Version 0.2.0 is in development. The package is not configured for publication
+to pub.dev (`publish_to: none`). License: [BSD-3-Clause](LICENSE).
 
-- Device enumeration and device/configuration/interface/endpoint descriptors.
-- USB permissions, opening/closing connections, claim/release interface,
-  alternate settings and configuration selection.
-- File descriptor, raw descriptors, serial numbers and device name/ID conversion.
-- Attach/detach events and engine lifecycle cleanup.
+## What works
 
-Bulk/control transfers, `UsbRequest` and `requestWait` are not implemented.
-Transport and WinUSB methods on Android connections throw `UnsupportedError`.
-`UsbRequest` is a platform-independent placeholder: getters return null,
-initialize/queue/cancel return false, and client-data setters/close do nothing.
-No buffer is inspected, no request is initialized and no transfer is submitted.
-The Windows backend is not implemented; its API declarations and the existing
-non-Android placeholders remain unchanged. `UsbAccessory` and Parcelable
-serialization are excluded. Additional descriptor requests using control
-transfers are outside this implementation.
+All management and information operations declared by this package's Android
+Host API have implementations:
 
-## Requirements and use
+| Task | Public API |
+| --- | --- |
+| Discover devices | `UsbManager.getDeviceList()` |
+| Read device/configuration/interface/endpoint information | `UsbDevice`, `UsbConfiguration`, `UsbInterface`, `UsbEndpoint` getters |
+| Check/request access | `hasPermission()`, `requestPermission()` |
+| Open/close connections | `openDevice()`, `UsbDeviceConnection.close()` |
+| Manage interfaces and settings | `claimInterface()`, `releaseInterface()`, `setInterface()`, `setConfiguration()` |
+| Read connection information | `getFileDescriptor()`, `getRawDescriptors()`, `getSerial()` |
+| Read device serial or convert Android names/IDs | `getSerialNumber()`, `getDeviceIdFromName()`, `getDeviceNameFromId()` |
+| Receive device events | `deviceAttached`, `deviceDetached` streams |
 
-Dart >=3.13.5 <4.0.0, Flutter >=3.47.7 and Android API >=28 (Android 9).
-The library compiles against API 36. The example inherits `compileSdk` and
-`targetSdk` from Flutter while explicitly setting `minSdk` to 28. The plugin
-does not set the consuming application's `targetSdk`; that remains an application
-setting. The minimum supported device API and the target API are separate values.
-Add the package to an application's `pubspec.yaml`:
+This is the implemented scope, not a claim of complete hardware or test coverage.
+Descriptor access covers Android's USB classes and the raw bytes returned by
+Android; additional descriptor requests through control transfers are not implemented.
+
+- `bulkTransfer()`, `controlTransfer()` and `requestWait()` fail with
+  `UnsupportedError` on Android.
+- `UsbRequest` is a placeholder on every platform: getters return null,
+  initialize/queue/cancel return false, and client-data setters/close do nothing.
+  It does not access buffers or submit native requests.
+- The Windows backend is not implemented. WinUSB methods fail with
+  `UnsupportedError` on Android; other platforms retain their placeholders.
+- `UsbAccessory` and Android Parcelable serialization are outside this API.
+
+## Requirements and installation
+
+Use Dart >=3.13.5 <4.0.0, Flutter >=3.47.7, and an Android device running API 28
+(Android 9) or later with USB Host/OTG support. Add the local plugin to your app:
 
 ```yaml
 dependencies:
@@ -40,148 +51,148 @@ dependencies:
     path: ../usb_host_proxy
 ```
 
-Import `package:usb_host_proxy/usb_host_proxy.dart`. The public classes are
-`UsbManager`, `UsbDevice`, `UsbConfiguration`, `UsbInterface`, `UsbEndpoint`,
-`UsbDeviceConnection`, `UsbRequest` and `UsbConstants`.
+Use USB from the engine's root Dart isolate: the isolate started by Flutter,
+normally running your UI. Managers in that engine share one session; creating
+another manager does not create another registry.
+Additional Dart isolates are not supported.
 
-## Code map and reading order
+## Basic workflow
 
-Start with the public Dart declarations, then follow an operation through the
-adapter to Java. Descriptor reads bypass the Java management wrapper and call
-the original framework object directly.
+Import `package:usb_host_proxy/usb_host_proxy.dart`, then enumerate devices in an
+async UI action. Let the user choose one, check permission, then open it.
+The map keys are Android device names:
 
-| Location | Responsibility |
-| --- | --- |
-| `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Public contracts, descriptor meanings, constants and unsupported placeholders. |
-| `lib/src/android/android_usb.dart` | JNI reference ownership, Java-to-Dart errors, completion-to-Future conversion and event streams. |
-| `lib/src/android/bindings.g.dart`, `tool/jnigen.dart` | Generated JNI signatures and the explicit regeneration entry point; no hand-written backend policy. |
-| `android/src/main/java/.../UsbHostProxy.java` | Device-name bookkeeping, permissions, shared workers and native connection lifetime. |
-| `android/src/main/java/.../UsbHostProxyPlugin.java` | Engine/Activity lifecycle and forwarding Activity intents; not USB descriptor or transport logic. |
-| `android/src/test/java`, `example/` | Mock-backed backend/lifecycle tests and a manual USB Host diagnostic app with fake-backed widget tests. |
+```dart
+final manager = UsbManager();
+final devices = await manager.getDeviceList();
+```
 
-Within `UsbHostProxy`, `Session` is the engine owner, `Device` retains a framework
-descriptor view and `Connection` owns one open native connection. `Permission`
-coalesces callers awaiting a decision; `Call` ensures a callback is settled at
-most once, even if session cleanup wins a race with a worker.
+If permission is needed, call `await manager.requestPermission(device)` from an
+explicit user action. Android may show a dialog; refusal or observed detach
+returns false. Enumeration and opening never request permission implicitly.
+Device-class policy can also require application permissions such as CAMERA for
+video devices; the plugin does not request those.
 
-When reading concurrency paths, distinguish the class lock (engine registry),
-session lock (lifecycle state and pending callbacks) and each connection's
-read/write lifetime lock (parallel native operations versus exclusive native
-close). Close marks admission closed under the session lock, then a worker waits
-for exclusive native access without holding the session lock. Native access is
-released before completion callbacks or close bookkeeping acquire the session
-lock. Neither session disposal nor detach forcibly interrupts an admitted call;
-cleanup schedules close and invalidates operations not yet admitted.
+This function reads information for a chosen, authorized device and always closes
+the connection it opens:
 
-## Lifecycle and errors
+```dart
+import 'package:flutter/foundation.dart';
+import 'package:usb_host_proxy/usb_host_proxy.dart';
 
-Use the engine's root Dart isolate. Managers share one session per engine.
-The existing single-root-isolate initialization and single Java event listener
-are retained. No background-isolate binding, listener fan-out or cross-isolate
-JNI-reference ownership is introduced.
-Descriptor getters call JNI directly. Opening, serial reads and potentially
-blocking management operations use the session's existing worker pool. There
-are no per-connection queues or FIFO guarantees; callers must await operations
-whose order matters. File descriptor/raw descriptor reads remain direct JNI
-calls. All connection calls share lifetime protection against native close,
-without serializing management calls against one another.
-`getDeviceList()` and `hasPermission()` still make synchronous framework calls
-through JNI; a Future in the public signature does not move those calls to a worker.
-`Session.workers` remains necessary for open, device serial reads and permission
-submission, connection management and close. Completion callbacks are also
-shared by management operations and remain in use.
+Future<void> readConnectionInfo(UsbManager manager, UsbDevice device) async {
+  if (!await manager.hasPermission(device)) {
+    debugPrint('USB permission is required.');
+    return;
+  }
 
-`requestPermission` shares a pending decision for the same Android name. Refusal
-or detach returns false; session termination fails pending calls. No timeout is
-imposed. Video-class devices may additionally require the application's CAMERA
-permission. `openDevice` never requests permission implicitly.
+  final connection = await manager.openDevice(device);
+  if (connection == null) {
+    debugPrint('Android could not open the device.');
+    return;
+  }
 
-Native false/null results are preserved. Android exceptions retain their Java
-details; invalid arguments/ownership map to `ArgumentError`, and closed
-connections or ended sessions to `StateError`.
+  try {
+    debugPrint('FD: ${await connection.getFileDescriptor()}');
+    final descriptors = await connection.getRawDescriptors();
+    debugPrint(
+      descriptors == null
+          ? 'Raw descriptors are unavailable.'
+          : 'Raw descriptors: ${descriptors.length} bytes',
+    );
+  } finally {
+    await connection.close();
+  }
+}
+```
 
-Await `close()` for each connection. Close is idempotent and immediately rejects
-new work and operations not yet admitted to native access. It invokes native close
-without individual interface releases. Even on a close error, the connection
-cannot be reused.
-Native close waits only for admitted calls to return, not for older pending
-worker tasks or callback delivery. It cannot overlap those native calls because
-Android's management methods do not all share the framework close lock and
-native close frees the connection object. This lifetime guard adds no USB
-queue, timeout or cancellation policy. Detach also schedules native close. Engine
-destruction/hot restart unregister receivers, settle pending calls and close
-connections. Temporary JNI references are released eagerly; escaping descriptor
-references use native finalizers because the public API has no dispose method.
+An unplug or Android error can fail an awaited call. Handle exceptions in your
+screen, subscribe to device events and cancel subscriptions on disposal. The
+[diagnostic example](example/README.md) demonstrates selection, permissions,
+cleanup and visible errors without transfers.
 
-Admission is the final lifecycle check while shared native access is held.
-Invalidation prevents pending operations from entering Android, but their Futures
-still settle through worker/callback scheduling. If an admitted native call does
-not return, close cannot finish. No session monitor is held while close waits.
+## Devices, descriptors and connections
 
-Event streams are broadcast streams without history. Attach while the engine is
-running is an event; USB-triggered app launch is initial state obtained through
-`getDeviceList()`. Automatic launch requires the consuming application's USB
-intent filter and device-filter metadata. Detached descriptor objects remain
-readable, but permission/serial reads can require a live authorized attachment.
+A **device** describes USB hardware. A **connection** is an opened native resource
+that you must close. Reading a descriptor does not open a connection, claim an
+interface or change a setting.
 
-Interface ownership is managed by Android and the kernel, not a library state
-machine. `claimInterface`, `releaseInterface`, `setInterface` and `setConfiguration`
-forward original descriptors and preserve native booleans and exceptions through
-the error translation above. Repeated Claim, Release without prior Claim and
-setting an alternate/configuration are not rejected based on operation history.
-Force is forwarded unchanged and does not guarantee success. The library records
-neither claims nor the active alternate setting; false/errors install no local
-restrictions or automatic recovery. Operations share the session worker pool,
-without FIFO ordering or release-specific admission blocking. Dart requires
-Android descriptor adapters so their native references can be passed through JNI.
-Java does not check reference identity against the connection's descriptor tree;
-Android receives the supplied interface/configuration and decides the outcome.
-Connection/session lifecycle and device-session ownership checks remain in place.
+Configurations contain interface descriptors; interfaces contain endpoint
+descriptors. Each interface descriptor represents an interface number and one
+alternate setting. Getter arguments are zero-based list indices, which are not
+necessarily configuration values, interface IDs or endpoint addresses.
 
-Android device adapters delegate `==` and `hashCode` to the framework's
-`UsbDevice.equals()` and `hashCode()`. Two Android device adapters with the same
-`deviceName` compare equal, including after name reuse or across sessions.
-Equality is not a liveness or permission check. Comparisons to strings or custom
-Dart device implementations
-return false; the native Java `equals(String)` convenience is not exposed as
-Dart equality because it would break symmetry with `String.==`.
+`UsbDevice.getInterface()` lists interfaces across configurations. Use
+`getConfiguration(i).getInterface(j)` when walking a particular configuration.
 
-Device identity follows Android's `deviceName`, with no private UUID, generation
-counter or attachment lease. Older views from the same active session are valid
-inputs to permission/open/serial calls; Android decides their result. Descriptor
-fields still belong to the retained framework object and do not update by name.
-Enumeration supplies the latest framework views without mutating older ones.
-It does not infer a physical reconnection merely from a different Java object.
+Device identity follows Android's `deviceName`, with no private device UUID or
+generation number. Android device adapters use native equality/hashing, so views
+with the same name compare equal. Names may be reused after disconnection and
+are not permanent hardware identifiers. Comparisons to strings or custom Dart
+device implementations return false.
 
-Attach delivery is deduplicated by name until observed absence or Android detach.
-A detach is authoritative: connections for its name are closed even if a new
-device is already present under that name in the latest list. Repeated detach
-without intervening work is idempotent. Without an Android attachment token, a
-late old detach cannot be distinguished from a new detach for a reused name;
-the plugin follows Android's events instead of guessing. No unseen physical
-unplug/replug cycle is reconstructed from descriptor fingerprints.
+Older views from the same active session remain valid inputs; Android decides
+presence and access. Their descriptor fields do not update automatically by
+name: enumerate again for current views. Objects from another engine or
+implementation are rejected. Equality does not bypass this check or revive a
+closed connection.
 
-The UUID that remains in the permission reply action isolates callback routes
-between engine sessions; it is not a USB identifier. Request codes identify
-pending decisions, and detach cancels matching decisions by name. The removed
-`deviceInstance` extra is unnecessary for correlation. Open attempts likewise
-have operation lifetimes: detach invalidates the attempt, and any late native
-connection is closed before its result is reported. Session shutdown settles
-calls immediately and still cleans late native results. Name reuse never revives
-a closed connection or an invalidated operation.
+## Operation results and close
 
-Enumeration reconciles names from event bookkeeping, connections, permissions
-and pending opens. Shutdown closes all owned connections, including ones opened
-using a saved device view before rediscovery. Neither path needs a device UUID.
+Native true/false/null results remain results. Exceptions are not changed into
+false: Java argument failures become `ArgumentError`, state failures become
+`StateError`, and other Java exceptions retain their details.
 
-## USB-triggered application launch
+Claim, Release and setting selection go directly to Android. There is no local
+claim-state machine, automatic recovery, prior-Claim requirement or check that a
+descriptor reference occurs in the connection's descriptor tree. Arguments must
+still be Android adapters so their native references can be passed through JNI.
+`force` is forwarded unchanged and does not guarantee a successful Claim.
 
-The consuming application owns the launch configuration, not the plugin.
-Merge this USB filter and metadata into its existing Flutter Activity declaration
-in `android/app/src/main/AndroidManifest.xml`. Keep its launcher filter, Flutter
-metadata, themes and other attributes; adapt the Activity name to the application.
-`singleTop` permits `onNewIntent()` when that Activity is already at the top of
-the task; it does not guarantee reuse in every task/back-stack arrangement.
+Management calls may run concurrently, even on the same connection. They have
+**no guaranteed submission order (FIFO)**. Await a result before submitting an
+operation that depends on it. Enumeration, permission checks, descriptor getters
+and FD/raw reads still call JNI synchronously; a Future signature does not itself
+move work off the isolate.
+
+`close()` immediately rejects new connection operations and prevents pending
+work from starting native access. It waits only for calls already allowed to
+start, including direct information reads, then calls native close once without
+individual Release calls. It does not drain older worker tasks or wait for their
+Dart callback delivery. A native call that does not return can prevent close from
+finishing; there is no extra timeout or forced interruption.
+
+Repeated close is safe. Even if native close fails, that connection cannot be
+reused; the failure reaches callers awaiting that attempt and is not replayed to
+later close calls. Releasing a JNI reference is not a substitute for native close.
+
+## Device events and cleanup
+
+Use `getDeviceList()` for initial state and `deviceAttached`/`deviceDetached` for
+changes. Streams do not replay earlier events. Enumeration can also detect a
+missing name and trigger cleanup.
+
+Activity intents and broadcasts share attach deduplication by name. A stored
+initial Activity intent is handled silently; a runtime new intent may emit an
+attach event. Enumeration alone does not synthesize attach.
+
+Android detach is authoritative: it closes connections and cancels pending
+permission/open work for that name, even if the latest list contains it again.
+A late native open result is closed before reporting the failed open. Session
+shutdown fails pending calls immediately and still cleans late results. Name
+reuse never revives a closed connection or cancelled operation.
+
+The plugin follows Android's events. Without additional Android information it
+cannot distinguish an old delayed detach from a new detach for the same reused
+name, and it does not infer hidden reconnects from descriptor changes.
+
+## Optional USB-triggered application launch
+
+The consuming application owns the launch configuration. The plugin manifest
+declares USB Host support as optional and installs no launch filter. To join
+Android's USB app chooser, merge this filter and metadata into the existing
+Flutter Activity. Keep its launcher filter, Flutter metadata, themes and other
+required attributes; adapt the Activity name to your application:
 
 ```xml
 <activity
@@ -197,9 +208,8 @@ the task; it does not guarantee reuse in every task/back-stack arrangement.
 </activity>
 ```
 
-Create `android/app/src/main/res/xml/device_filter.xml`. This is a template:
-replace both placeholders with actual decimal VID/PID values for supported
-hardware before using it. No device identifiers are supplied by this project.
+Create `android/app/src/main/res/xml/device_filter.xml`. Replace both placeholders
+with actual decimal VID/PID values before using this template:
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -208,124 +218,60 @@ hardware before using it. No device identifiers are supplied by this project.
 </resources>
 ```
 
-For a deliberately broader device family, Android also supports `class`,
-`subclass` and `protocol` criteria. An attribute-free `usb-device` entry matches
-all devices; use it only deliberately, as in the diagnostic example. See the [Android USB Host guide](https://developer.android.com/develop/connectivity/usb/host)
+Android also supports class/subclass/protocol criteria. An attribute-free
+`<usb-device />` matches every device; the diagnostic example intentionally uses
+that broad filter, but the plugin does not impose it on consumers.
+
+Android controls the chooser, remembered default handler and permission grant.
+Choosing the app can grant permission until detach; it does not make the plugin
+select, open or claim a device. `singleTop` permits reuse at the top of the task,
+not in every back-stack arrangement. If you override `onNewIntent()`, call the
+superclass so Flutter can forward it. Engines without an Activity retain
+enumeration and broadcast support.
+
+See the [Android USB Host guide](https://developer.android.com/develop/connectivity/usb/host)
 and [Activity launch modes](https://developer.android.com/guide/topics/manifest/activity-element#lmode).
-The plugin manifest installs no launch filter. The diagnostic example deliberately
-matches all USB devices and participates in Android's chooser/default-handler
-mechanism. Accepting the system USB launch can grant permission until detach;
-the example still does not automatically select, open or claim a device.
 
-The plugin uses Flutter `ActivityAware` and the binding's new-intent listener;
-no custom MainActivity override is required with the standard Flutter embedding.
-If the application overrides `onNewIntent()`, it must retain Flutter's forwarding
-by calling the superclass implementation. The plugin does not replace the
-Activity's stored intent or automatically request USB permission.
+## Tests and verification limits
 
-Activity delivery follows the engine/session ownership boundary:
+| Area | Automated checks | Remaining JNI/device verification |
+| --- | --- | --- |
+| Discovery/events | Java tests cover views, name reuse, missing devices, deduplication, Activity intents and lifecycle. | Real list keys, callbacks and USB chooser behavior. |
+| Permissions | Java tests cover coalescing, grant/refusal, old views, late replies, session isolation and errors. | System dialogs, device-class permissions and OEM behavior. |
+| Connections/management | Java tests cover native results/errors, concurrent calls, close exclusion, late opens and cleanup. | Actual kernel/device behavior, settings and resource teardown. |
+| Descriptor getters/equality | Adapters call Android methods; widget tests use fake descriptors. | JNI values, equality/hash, name/ID conversion and reference lifetime. |
+| Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
+| Request placeholders | Tests check null/false/no-op results without native/buffer access. | Transport is not implemented or verified. |
 
-| Delivery or lifecycle change | Session and notification behavior |
-| --- | --- |
-| Initial `Activity.getIntent()` or Activity recreation | Reconcile silently; obtain initial devices through `getDeviceList()`. |
-| `onNewIntent()` or USB broadcast | Use the same registry and attach flag; notify at most once per observed attachment. |
-| Activity detach/configuration change | Remove the old listener; preserve the session, notification flags and USB connections. |
-| Engine restart | Replace the session, invalidate its old objects and pending work, retain the Activity registration. |
-| Engine/plugin shutdown | Remove the Activity listener and dispose the session, including its receivers and pending work. |
+Robolectric tests run against API 28, 31, 33 and 35 with mocked USB objects.
+Widget tests use fake public interfaces. Neither suite executes Dart-to-JNI USB
+integration. There is no full branch/API-coverage measurement or automated
+physical-device suite; passing tests do not establish complete hardware support
+or JNI ownership/error-conversion correctness.
 
-Initial intent handling consumes any later duplicate attach notification for
-that observed attachment; it cannot retract a broadcast already delivered.
-Both paths verify live presence, so a saved intent cannot restore an absent
-device. A listener result of true means a readable USB attach payload was
-recognized, not necessarily that a device was present or an event was emitted.
-Unrelated actions and missing/unreadable device payloads are not handled.
-Headless engines retain broadcast/discovery support without an Activity.
+With dependencies and tooling already installed, run:
 
-## Bindings and tests
+```powershell
+# Repository root
+flutter analyze --no-pub
 
-`tool/jnigen.dart` generates the committed private bindings from Android SDK
-platform 36 and this plugin's Java sources:
+# example/
+flutter test --no-pub
+flutter analyze --no-pub
 
-```sh
-dart run tool/jnigen.dart /path/to/Android/Sdk
+# example/android/
+.\gradlew.bat :usb_host_proxy:testDebugUnitTest --offline --console=plain --no-daemon
 ```
 
-The SDK path can instead come from `ANDROID_SDK_ROOT`. `JNIGEN_SUMMARIZER`
-optionally selects a prebuilt ApiSummarizer command. Do not edit generated
-binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool.
+The Java task compiles library/test code, not an example APK. Offline mode needs
+cached dependencies. Manual hardware scenarios are in the [example README](example/README.md).
 
-Android unit test sources in `android/src/test/java` target API 28, 31, 33 and 35
-to cover the permission PendingIntent and receiver API branches. They use
-Robolectric and mocked USB objects; they cover name-based device views, duplicate
-events, permission replies, device-session ownership, parallel management work
-and cleanup. Interface tests cover native true/false/error forwarding, repeated
-operations, original alternate descriptors, independent connections, concurrent
-same-connection calls, forwarding of descriptors absent from the device registry,
-close failures and rejection before native admission. Controlled worker starts
-test close overtaking pending work; blocked native calls test lifetime protection
-during close, detach and pool shutdown. Direct FD/raw reads also have tests that
-hold native access while close is requested and verify rejection of later reads.
-`UsbHostProxyPluginTest` checks engine attach, restart, destruction and plugin
-detach using a mocked Flutter engine, without starting the Flutter runtime. It
-also checks initial/new Activity intents, both Intent/broadcast delivery orders,
-invalid payloads, stale intents/listeners and Activity configuration changes.
+## Working on the plugin
 
-### Management coverage and limits
+Read [the Android backend guide](doc/android_backend.md) for the source map,
+resource ownership, synchronization, Activity lifecycle and JNI regeneration.
+The library compiles against API 36; library and example both require API 28.
+The example inherits `compileSdk`/`targetSdk` from Flutter. Consuming applications
+choose their own `targetSdk`.
 
-All management and information members declared by the Android-facing public
-API have implementations. This is implementation coverage, not proof that every
-branch or device behavior has been tested. The Windows pipe extensions,
-`UsbAccessory` and Parcelable serialization are outside the Android Host scope.
-
-| Area | Implementation and automated checks | Remaining verification |
-| --- | --- | --- |
-| Enumeration and names | Java tests preserve native views, refresh snapshots, reconcile absence and deduplicate notifications. | Dart list keys and JNI object lifetime on a device. |
-| Device/configuration/interface/endpoint fields | Dart adapters call original Android getters; the example uses fake descriptors in widget tests. | Real JNI getter results, indices, optional strings and static name/ID conversion. |
-| Permissions | Java tests cover name-based coalescing, grant/refusal, old/foreign views, late replies, session isolation, submission errors and cleanup. | System permission UI, class-specific permission policy and OEM behavior. |
-| Open/Close and connection information | Java tests cover null/errors, late opens, serial values/errors, raw bytes/null/errors, FD results, close ordering and invalidation. | JNI byte-array conversion, error translation and real resource teardown. |
-| Claim/Release and setting selection | Java tests verify native booleans/exceptions, force, original descriptors, parallel execution and independent connections. | Real kernel/device behavior, alternate settings and configuration changes; the example does not select settings. |
-| Events and engine/Activity lifecycle | Java tests cover initial/new intents, broadcasts, deduplication, restart, listener removal and headless sessions. | Actual Flutter restart, USB app chooser and cold/warm launch on hardware. |
-
-There is no full API or branch-coverage measurement. In particular, the
-descriptor adapters (including device equality/hashing), static device-name
-conversions, JNI finalizers and Dart exception mapping are not executed by the
-mock-backed Java/widget suites.
-
-Widget tests in `example/test` exercise the diagnostic UI using a fake manager,
-including None selectors, force forwarding, fixed section geometry, unlimited
-console history, unconditional end scrolling, Clear, cleanup and late results.
-The raw/descriptor panels scroll independently; USB state changes replace data
-and enabled callbacks rather than adding/removing sections. Tests compare panel
-dimensions, section positions and retained scroll-position objects, not only text.
-The console builds rows lazily while retaining the complete message history;
-tests also cover multiline end scrolling and independent raw/descriptor panel
-offsets after offscreen destruction and recreation. Logging still rebuilds the
-screen, including its synchronous descriptor reads; lazy rows do not isolate
-those reads or bound the memory occupied by stored messages.
-Widget tests do not execute JNI. There is currently no automated Dart-to-JNI
-integration test or physical-device test; Java tests do not verify JNI reference
-ownership, Dart error mapping or real Android USB behavior.
-The [example](example/README.md) supports manual management checks on
-Android hardware without transfers or configuration changes, with a broad USB
-launch filter. The example README lists test commands and their verification boundary.
-
-On-device verification remains necessary for JNI descriptors/list keys and
-callbacks, permission grant/refusal, detach during pending work, same-name
-reattachment, independent devices, engine restart and USB-triggered launch.
-These are verification scenarios, not claims of completed hardware testing.
-For equality/hashing, compare adapters from consecutive enumerations and use
-them as Set/Map keys. Older same-session views remain accepted inputs; Android
-decides access, while previously closed connections remain unusable.
-`example/test/usb_request_test.dart` checks placeholder return values, idempotent
-no-op close and lack of buffer/native access. The withdrawn transport's buffer
-helpers, request lifecycle tests and generated request/result bindings are removed.
-The earlier close/active-transport issue remains outside this verification:
-transport paths are absent, and the lifetime guard covers only implemented
-management/information calls. Revisit transport ownership and close before
-adding transfers or requests again.
-
-## References
-
-- [Android USB Host](https://developer.android.com/develop/connectivity/usb/host)
-- [Android USB API](https://developer.android.com/reference/android/hardware/usb/package-summary)
-- [WinUSB pipe policies](https://learn.microsoft.com/en-us/windows-hardware/drivers/usbcon/winusb-functions-for-pipe-policy-modification)
+Android API reference: [android.hardware.usb](https://developer.android.com/reference/android/hardware/usb/package-summary).

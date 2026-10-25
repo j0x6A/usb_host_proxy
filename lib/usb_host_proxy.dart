@@ -1,19 +1,21 @@
-/// The shared USB host API for Android and Windows.
+/// USB Host device discovery, information and management for Android.
 ///
-/// Android management and device events use JNI. USB transport, UsbRequest and
-/// the Windows backend are not implemented. UsbRequest placeholders retain
-/// their documented behavior.
+/// Android management and device events use JNI. USB transport, [UsbRequest]
+/// and the Windows backend are not implemented; their declarations remain for
+/// future work. Import this library to access the public classes and constants.
 ///
 /// Android USB Host classes and protocol constants are represented without
-/// UsbAccessory. Potentially blocking operations execute outside the Dart
-/// isolate; descriptor getters directly read the original objects. Device events
-/// use streams; requestPermission returns the decision instead of PendingIntent.
+/// UsbAccessory. Management workers handle opening, serial reads, interface and
+/// configuration changes, and close. Enumeration, permission checks, descriptor
+/// getters and FD/raw reads still call JNI synchronously. Events use streams;
+/// requestPermission returns the decision instead of exposing a PendingIntent.
 ///
 /// Java overloads share one Dart method with named optional arguments. Static
 /// UsbDevice name/ID conversions use getDeviceIdFromName/getDeviceNameFromId
 /// because their Android names are already used by instance methods in Dart.
-/// Uint8List slices and UsbRequest.transferredLength replace Java ByteBuffer's
-/// position/limit state; deprecated queue behavior is not reproduced.
+/// Transport declarations reserve Uint8List slices and transferredLength instead
+/// of Java ByteBuffer position/limit state. They do not currently submit data,
+/// advance buffers or initialize native requests.
 ///
 /// Android Parcelable members (CREATOR, describeContents, writeToParcel and
 /// inherited parcel flags) are not part of this cross-platform API.

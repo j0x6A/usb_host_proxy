@@ -226,6 +226,7 @@ public final class UsbHostProxy {
         private Device remember(UsbDevice usbDevice) {
             String name = usbDevice.getDeviceName();
             Device previous = devices.get(name);
+            // Reusing a view saves an allocation; it does not validate an attachment.
             if (previous != null && previous.usbDevice == usbDevice) return previous;
             Device device = new Device(this, usbDevice);
             device.attachNotified = previous != null && previous.attachNotified;
@@ -324,6 +325,7 @@ public final class UsbHostProxy {
                         opened = manager.openDevice(device.usbDevice);
                     } catch (Throwable error) { call.finish(null, error); return; }
                     synchronized (Session.this) {
+                        // The native open may have completed after detach or session shutdown.
                         if (call.completion != null && call.openingName != null) {
                             if (opened == null) { call.finish(null, null); return; }
                             Connection connection = new Connection(this, call.openingName, opened);
@@ -332,6 +334,7 @@ public final class UsbHostProxy {
                             return;
                         }
                     }
+                    // No caller owns this result. Close it without holding the session monitor.
                     if (opened != null) {
                         try { opened.close(); }
                         catch (Throwable error) {
@@ -485,7 +488,7 @@ public final class UsbHostProxy {
         }
     }
 
-    /** Exactly-once callback slot shared by normal completion and session cleanup. */
+    /** Lets either a worker or session cleanup deliver the callback, never both. */
     private static final class Call {
         /** Owns the pending-call set and the monitor used to arbitrate completion. */
         final Session owner;
