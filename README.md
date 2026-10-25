@@ -57,6 +57,10 @@ normally running your UI. Managers in that engine share one session; creating
 another manager does not create another registry.
 Additional Dart isolates are not supported.
 
+Platform selection is internal to the plugin. Name/ID conversion does not start
+a USB management session. Linux, Windows and other non-Android hosts retain the
+documented empty/false/null placeholders; routing does not add platform support.
+
 ## Basic workflow
 
 Import `package:usb_host_proxy/usb_host_proxy.dart`, then enumerate devices in an

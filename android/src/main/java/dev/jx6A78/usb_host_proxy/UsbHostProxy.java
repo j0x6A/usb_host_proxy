@@ -806,44 +806,28 @@ public final class UsbHostProxy {
             submit(completion, () -> connection.getSerial());
         }
 
-        /** Forwards claim/force without imposing descriptor-reference identity rules. */
-        void claim(UsbInterface intf, boolean force, Completion completion) {
-            submit(completion, () -> connection.claimInterface(intf, force));
-        }
-
-        /** Forwards release without requiring a prior claim or recording ownership history. */
-        void release(UsbInterface intf, Completion completion) {
-            submit(completion, () -> connection.releaseInterface(intf));
-        }
-
-        /** Forwards the alternate-setting request; Android decides whether it is allowed. */
-        void selectInterface(UsbInterface intf, Completion completion) {
-            submit(completion, () -> connection.setInterface(intf));
-        }
-
-        /** Forwards the configuration without scanning this device's descriptor references. */
-        void selectConfiguration(UsbConfiguration configuration, Completion completion) {
-            submit(completion, () -> connection.setConfiguration(configuration));
-        }
-
         /** Resolves a live Java view, without imposing descriptor-identity or claim rules. */
         public void claimInterface(Interface intf, boolean force, Completion completion) {
-            claim(intf.descriptor(), force, completion);
+            UsbInterface descriptor = intf.descriptor();
+            submit(completion, () -> connection.claimInterface(descriptor, force));
         }
 
         /** Explicit release remains an Android decision, even without a prior claim. */
         public void releaseInterface(Interface intf, Completion completion) {
-            release(intf.descriptor(), completion);
+            UsbInterface descriptor = intf.descriptor();
+            submit(completion, () -> connection.releaseInterface(descriptor));
         }
 
         /** Forwards a live alternate-setting descriptor to Android. */
         public void setInterface(Interface intf, Completion completion) {
-            selectInterface(intf.descriptor(), completion);
+            UsbInterface descriptor = intf.descriptor();
+            submit(completion, () -> connection.setInterface(descriptor));
         }
 
         /** Forwards a live configuration descriptor to Android. */
         public void setConfiguration(Configuration configuration, Completion completion) {
-            selectConfiguration(configuration.descriptor(), completion);
+            UsbConfiguration descriptor = configuration.descriptor();
+            submit(completion, () -> connection.setConfiguration(descriptor));
         }
 
         /**

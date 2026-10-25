@@ -222,6 +222,10 @@ descriptor forwarding, parallel execution and lifecycle independently of the UI.
 Those Java tests cover invalidation of saved views after detach, name-based permission coalescing,
 session-isolated replies and cleanup of opens invalidated by detach/restart,
 including rejection of stale views after reconnection. No device UUID is involved.
+Management tests use the JNI-facing Java methods and check that descriptor
+resolution still happens before worker dispatch. `test/usb_backend_test.dart`
+checks non-Android routing, unchanged placeholders, session-free adapter creation
+and asynchronous root-isolate rejection without loading JNI on the test host.
 They also check device/connection serial values and errors, native FD/raw
 descriptor results, rejection after close and permission submission failures.
 Blocked direct FD/raw reads verify that native close waits for their return

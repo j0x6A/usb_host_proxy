@@ -1,7 +1,6 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'android/android_usb.dart';
+import 'usb_backend_selector.dart';
 import 'usb_device.dart';
 import 'usb_device_connection.dart';
 
@@ -38,9 +37,7 @@ class UsbManager {
   /// initial state available through [getDeviceList], not a replayed event.
   /// Runtime Activity intents and broadcasts share attachment deduplication.
   /// A stored Activity intent read after recreation is also silent initial state.
-  Stream<UsbDevice> get deviceAttached => Platform.isAndroid
-      ? AndroidUsb.instance.deviceAttached
-      : const Stream<UsbDevice>.empty();
+  Stream<UsbDevice> get deviceAttached => usbBackend.deviceAttached;
 
   /// Stream of device views for names removed from the observed device list.
   ///
@@ -52,9 +49,7 @@ class UsbManager {
   /// device list becomes empty.
   /// Java rejects an old queued detach after a newer same-name device view
   /// has already been exposed to Dart through enumeration or an attach event.
-  Stream<UsbDevice> get deviceDetached => Platform.isAndroid
-      ? AndroidUsb.instance.deviceDetached
-      : const Stream<UsbDevice>.empty();
+  Stream<UsbDevice> get deviceDetached => usbBackend.deviceDetached;
 
   /// Returns devices keyed by the name returned by [UsbDevice.getDeviceName].
   ///
@@ -68,10 +63,8 @@ class UsbManager {
   ///
   /// On Android the enumeration itself is synchronous JNI work. Other platforms
   /// currently return an empty map.
-  Future<Map<String, UsbDevice>> getDeviceList() async {
-    if (Platform.isAndroid) return AndroidUsb.instance.getDeviceList();
-    return <String, UsbDevice>{};
-  }
+  Future<Map<String, UsbDevice>> getDeviceList() async =>
+      usbBackend.getDeviceList();
 
   /// Whether the application currently has permission to access [device].
   ///
@@ -79,10 +72,8 @@ class UsbManager {
   /// from another engine or implementation are rejected. The framework check runs
   /// synchronously despite this method returning a Future. Other platforms
   /// currently return false. Invalidated Android views fail with [StateError].
-  Future<bool> hasPermission(UsbDevice device) async {
-    if (Platform.isAndroid) return AndroidUsb.instance.hasPermission(device);
-    return false;
-  }
+  Future<bool> hasPermission(UsbDevice device) async =>
+      usbBackend.hasPermission(device);
 
   /// Requests access and waits for the permission decision.
   ///
@@ -95,12 +86,8 @@ class UsbManager {
   /// it does not guarantee the device is still present. A pending request cancelled
   /// by detach resolves false.
   /// Other platforms currently return false without requesting anything.
-  Future<bool> requestPermission(UsbDevice device) async {
-    if (Platform.isAndroid) {
-      return AndroidUsb.instance.requestPermission(device);
-    }
-    return false;
-  }
+  Future<bool> requestPermission(UsbDevice device) async =>
+      usbBackend.requestPermission(device);
 
   /// Opens [device], or returns null if it cannot be opened.
   ///
@@ -110,8 +97,6 @@ class UsbManager {
   /// An open attempt invalidated by observed detach closes any late native result
   /// and fails with [StateError]. Session termination also fails pending opens.
   /// A closed connection is never reused. Other platforms return null.
-  Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
-    if (Platform.isAndroid) return AndroidUsb.instance.openDevice(device);
-    return null;
-  }
+  Future<UsbDeviceConnection?> openDevice(UsbDevice device) async =>
+      usbBackend.openDevice(device);
 }

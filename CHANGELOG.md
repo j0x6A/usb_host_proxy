@@ -1,5 +1,10 @@
 ## 0.2.0 (unreleased)
 
+- Centralize platform selection behind an internal backend contract. Keep Android
+  session binding lazy and name/ID conversion session-free, preserving all
+  non-Android placeholders. Remove four Java connection forwarding helpers while
+  keeping descriptor resolution before worker dispatch; exercise JNI entry points
+  directly in management tests.
 - Make Java the sole owner of USB lifecycle, descriptor validity, delayed-event
   admission and automatic cleanup. Dart forwards calls/results/events and retains
   only JNI references to Java views; remove its lifecycle registry and helpers.

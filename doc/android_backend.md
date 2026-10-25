@@ -9,7 +9,8 @@ its implemented scope.
 
 | File | Responsibility |
 | --- | --- |
-| `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Exported classes, contracts, descriptor meanings, constants and placeholders. |
+| `lib/usb_host_proxy.dart` and its `lib/src/usb_*.dart` exports | Public classes, contracts, descriptor meanings, constants and placeholders. |
+| `lib/src/usb_backend.dart`, `lib/src/usb_backend_selector.dart` | Internal backend contract and the single platform selection point. Not exported by the public library. |
 | `lib/src/android/android_usb.dart` | JNI references, Java-to-Dart errors, completion-to-Future conversion and event streams. |
 | `lib/src/android/bindings.g.dart` | Generated Java bindings; do not edit by hand. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxy.java` | Sessions, discovery, permissions, workers and native connection lifetime. |
@@ -24,12 +25,28 @@ shared lifetime, then reads the original Android descriptor. No worker or open
 connection is needed for these getters.
 
 For management, follow `claimInterface()` through `_AndroidConnection`, `_call`,
-Java `Connection.claimInterface()`, `Connection.claim()` and `Connection.submit()`.
+Java `Connection.claimInterface()` and `Connection.submit()`.
 The Java entry point resolves the interface view to its live Android descriptor.
-A worker calls Android;
+Resolution happens before submission, not inside the worker. A worker calls Android;
 `Completion` delivers the result/error and `_call` completes the Dart Future.
 `openDevice()` has a separate path because a late result may need cleanup before
 it can be given to Dart.
+
+## Backend routing
+
+`UsbManager` and the static device-name/ID helpers delegate to `UsbBackend`.
+The selector chooses Android or the existing non-Android placeholders. Linux
+and Windows implementations can replace that branch without adding platform
+conditions to public methods; neither backend is implemented by this refactor.
+Each system adapter owns its resources, while the shared contract has no USB
+registry, lifecycle policy or operation queue.
+
+Obtaining `AndroidUsb.instance` does not bind JNI to an engine session. Its
+nullable session reference has a lazy initializer, first read by a management
+operation or event getter. Disposal clears the initialized reference; subsequent
+operations fail without rebinding the ended isolate. Name/ID conversions do not
+read that reference or install event listeners. Async entry points still report
+initialization/validation failures through their returned futures.
 
 ## Objects and owners
 

@@ -16,6 +16,7 @@ import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbConfiguration;
 import android.hardware.usb.UsbManager;
 import android.os.Looper;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
@@ -148,6 +149,26 @@ public class UsbHostProxyTest {
             value.setAccessible(true);
             return value.get(holder);
         } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+
+    /** Creates JNI argument fixtures without adding descriptors to the discovery tree.
+     * Reflection is test-only; production creates these views in descriptor getters.
+     */
+    private <T> T view(Class<T> type, Class<?> descriptorType, Object descriptor) {
+        try {
+            Constructor<T> constructor = type.getDeclaredConstructor(
+                UsbHostProxy.Session.class, UsbHostProxy.Lifetime.class, descriptorType);
+            constructor.setAccessible(true);
+            return constructor.newInstance(session, device.lifetime, descriptor);
+        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+    }
+
+    private UsbHostProxy.Interface interfaceView(UsbInterface descriptor) {
+        return view(UsbHostProxy.Interface.class, UsbInterface.class, descriptor);
+    }
+
+    private UsbHostProxy.Configuration configurationView(UsbConfiguration descriptor) {
+        return view(UsbHostProxy.Configuration.class, UsbConfiguration.class, descriptor);
     }
 
     /** One original framework tree, exposed through both flattened and nested paths. */
@@ -410,7 +431,7 @@ public class UsbHostProxyTest {
             @Override public void success(Object value) { delivery.add(() -> result.success(value)); }
             @Override public void failure(Throwable error) { delivery.add(() -> result.failure(error)); }
         };
-        connection.claim(intf, false, delayed); // Default mock result is false, not an exception.
+        connection.claimInterface(interfaceView(intf), false, delayed); // Default mock result is false, not an exception.
         Runnable callback = delivery.poll(10, TimeUnit.SECONDS);
         assertNotNull(callback);
         detachDevice();
@@ -450,6 +471,35 @@ public class UsbHostProxyTest {
         verify(nativeConnection, never()).close();
         Result closed = new Result();
         connection.close(closed);
+        assertNull(closed.await().error);
+    }
+
+    @Test public void descriptorResolutionRemainsBeforeWorkerDispatch() throws Exception {
+        UsbDevice otherUsb = mock(UsbDevice.class);
+        when(otherUsb.getDeviceName()).thenReturn("/dev/bus/usb/001/003");
+        UsbInterface rawInterface = mock(UsbInterface.class);
+        when(otherUsb.getInterface(0)).thenReturn(rawInterface);
+        attachedDevices.put(otherUsb.getDeviceName(), otherUsb);
+        UsbHostProxy.Interface argument = null;
+        for (UsbHostProxy.Device candidate : session.deviceList()) {
+            if (candidate.descriptor() == otherUsb) argument = candidate.getInterface(0);
+        }
+        assertNotNull(argument);
+        UsbHostProxy.Connection connection = open();
+        LinkedBlockingQueue<Runnable> workers = holdWorkers();
+        when(nativeConnection.claimInterface(rawInterface, false)).thenReturn(true);
+        Result claimed = new Result();
+        connection.claimInterface(argument, false, claimed);
+        attachedDevices.remove(otherUsb.getDeviceName());
+        broadcast(UsbManager.ACTION_USB_DEVICE_DETACHED, otherUsb);
+        assertThrows(IllegalStateException.class, argument::getId);
+        workers.remove().run();
+        // The argument was already resolved; the connection's own device is live.
+        assertEquals(true, claimed.await().value);
+        verify(nativeConnection).claimInterface(rawInterface, false);
+        Result closed = new Result();
+        connection.close(closed);
+        workers.remove().run();
         assertNull(closed.await().error);
     }
 
@@ -1027,10 +1077,10 @@ public class UsbHostProxyTest {
         Result select = new Result();
         Result configuration = new Result();
         Result release = new Result();
-        connection.claim(intf, true, claim);
-        connection.selectInterface(intf, select);
-        connection.release(intf, release);
-        connection.selectConfiguration(config, configuration);
+        connection.claimInterface(interfaceView(intf), true, claim);
+        connection.setInterface(interfaceView(intf), select);
+        connection.releaseInterface(interfaceView(intf), release);
+        connection.setConfiguration(configurationView(config), configuration);
         assertEquals(true, claim.await().value);
         assertEquals(true, select.await().value);
         assertEquals(true, configuration.await().value);
@@ -1239,10 +1289,10 @@ public class UsbHostProxyTest {
         Result setting = new Result();
         Result configuration = new Result();
         connection.serial(serial);
-        connection.claim(intf, false, claim);
-        connection.release(intf, release);
-        connection.selectInterface(intf, setting);
-        connection.selectConfiguration(config, configuration);
+        connection.claimInterface(interfaceView(intf), false, claim);
+        connection.releaseInterface(interfaceView(intf), release);
+        connection.setInterface(interfaceView(intf), setting);
+        connection.setConfiguration(configurationView(config), configuration);
         Result closed = new Result();
         Result alsoClosed = new Result();
         connection.close(closed);
@@ -1291,17 +1341,19 @@ public class UsbHostProxyTest {
         return intf;
     }
 
-    /** Awaits backend work without simulating Android's claim policy. */
+    /** Uses the JNI entry point; validation throws become failures as in Dart's _call. */
     private Result claim(UsbHostProxy.Connection connection, UsbInterface intf) throws Exception {
         Result result = new Result();
-        connection.claim(intf, false, result);
+        try { connection.claimInterface(interfaceView(intf), false, result); }
+        catch (IllegalStateException error) { result.failure(error); }
         return result.await();
     }
 
-    /** Keeps a native false distinct from an exception delivered by the backend. */
+    /** Keeps native false distinct from synchronous validation and worker failures. */
     private Result release(UsbHostProxy.Connection connection, UsbInterface intf) throws Exception {
         Result result = new Result();
-        connection.release(intf, result);
+        try { connection.releaseInterface(interfaceView(intf), result); }
+        catch (IllegalStateException error) { result.failure(error); }
         return result.await();
     }
 
@@ -1328,10 +1380,10 @@ public class UsbHostProxyTest {
         when(nativeConnection.setInterface(intf)).thenReturn(false, true);
         UsbHostProxy.Connection connection = open();
         Result select = new Result();
-        connection.selectInterface(intf, select);
+        connection.setInterface(interfaceView(intf), select);
         assertEquals(false, select.await().value);
         Result again = new Result();
-        connection.selectInterface(intf, again);
+        connection.setInterface(interfaceView(intf), again);
         assertEquals(true, again.await().value);
         verify(nativeConnection, times(2)).setInterface(intf);
         verify(nativeConnection, never()).claimInterface(any(), anyBoolean());
@@ -1400,11 +1452,11 @@ public class UsbHostProxyTest {
         Result laterClaim = new Result();
         Result configuration = new Result();
         try {
-            connection.selectInterface(intf, before);
-            connection.release(intf, releasing);
-            connection.selectInterface(intf, after);
-            connection.claim(intf, false, laterClaim);
-            connection.selectConfiguration(config, configuration);
+            connection.setInterface(interfaceView(intf), before);
+            connection.releaseInterface(interfaceView(intf), releasing);
+            connection.setInterface(interfaceView(intf), after);
+            connection.claimInterface(interfaceView(intf), false, laterClaim);
+            connection.setConfiguration(configurationView(config), configuration);
             assertEquals(true, before.await().value);
             assertEquals(true, releasing.await().value);
             assertEquals(true, after.await().value);
@@ -1432,11 +1484,11 @@ public class UsbHostProxyTest {
             assertEquals(attempt == 0, claim(connection, intf).value);
             assertEquals(attempt != 0, release(connection, intf).value);
             Result setting = new Result();
-            connection.selectInterface(intf, setting);
+            connection.setInterface(interfaceView(intf), setting);
             assertEquals(attempt == 0, setting.await().value);
             assertNull(setting.error);
             Result configuration = new Result();
-            connection.selectConfiguration(config, configuration);
+            connection.setConfiguration(configurationView(config), configuration);
             assertEquals(attempt != 0, configuration.await().value);
             assertNull(configuration.error);
         }
@@ -1466,10 +1518,10 @@ public class UsbHostProxyTest {
         assertSame(claimError, claim(connection, intf).error);
         assertSame(releaseError, release(connection, intf).error);
         Result setting = new Result();
-        connection.selectInterface(intf, setting);
+        connection.setInterface(interfaceView(intf), setting);
         assertSame(settingError, setting.await().error);
         Result configuration = new Result();
-        connection.selectConfiguration(config, configuration);
+        connection.setConfiguration(configurationView(config), configuration);
         assertSame(configError, configuration.await().error);
         verify(nativeConnection).claimInterface(intf, false);
         verify(nativeConnection).releaseInterface(intf);
@@ -1489,19 +1541,19 @@ public class UsbHostProxyTest {
         when(nativeConnection.setConfiguration(config)).thenReturn(false, true, false, true);
         UsbHostProxy.Connection connection = open();
         Result failed = new Result();
-        connection.selectConfiguration(config, failed);
+        connection.setConfiguration(configurationView(config), failed);
         assertEquals(false, failed.await().value);
         assertEquals(false, claim(connection, intf).value);
         Result success = new Result();
-        connection.selectConfiguration(config, success);
+        connection.setConfiguration(configurationView(config), success);
         assertEquals(true, success.await().value);
         assertEquals(false, release(connection, intf).value);
         Result afterRelease = new Result();
-        connection.selectConfiguration(config, afterRelease);
+        connection.setConfiguration(configurationView(config), afterRelease);
         assertEquals(false, afterRelease.await().value);
         assertEquals(true, claim(connection, intf).value);
         Result afterClaim = new Result();
-        connection.selectConfiguration(config, afterClaim);
+        connection.setConfiguration(configurationView(config), afterClaim);
         assertEquals(true, afterClaim.await().value);
         verify(nativeConnection, times(4)).setConfiguration(config);
         Result closed = new Result();
@@ -1534,10 +1586,10 @@ public class UsbHostProxyTest {
             assertTrue(claim(connection, intf).error instanceof IllegalStateException);
             assertTrue(release(connection, intf).error instanceof IllegalStateException);
             Result selected = new Result();
-            connection.selectInterface(intf, selected);
+            connection.setInterface(interfaceView(intf), selected);
             assertTrue(selected.await().error instanceof IllegalStateException);
             Result configuration = new Result();
-            connection.selectConfiguration(mock(UsbConfiguration.class), configuration);
+            connection.setConfiguration(configurationView(mock(UsbConfiguration.class)), configuration);
             assertTrue(configuration.await().error instanceof IllegalStateException);
         } finally { unblock.countDown(); }
         assertNull(serial.await().error);
@@ -1558,7 +1610,7 @@ public class UsbHostProxyTest {
         assertEquals(true, claim(connection, intf).value);
         LinkedBlockingQueue<Runnable> workers = holdWorkers();
         Result pendingRelease = new Result();
-        connection.release(intf, pendingRelease);
+        connection.releaseInterface(interfaceView(intf), pendingRelease);
         detachDevice();
         assertTrue(claim(connection, intf).error instanceof IllegalStateException);
         assertEquals(2, workers.size());

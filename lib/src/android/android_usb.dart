@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:jni/jni.dart';
 
+import '../usb_backend.dart';
 import '../usb_configuration.dart';
 import '../usb_device.dart';
 import '../usb_device_connection.dart';
@@ -100,19 +101,24 @@ String? _resultString(JObject? value) =>
     value?.as(JString.type).use((v) => v.toDartString());
 
 /// Engine-root proxy. Java owns discovery, event admission and all USB lifecycle.
-final class AndroidUsb {
+final class AndroidUsb implements UsbBackend {
   static final AndroidUsb instance = AndroidUsb._();
-  j.UsbHostProxy$Session? _reference;
+
+  /// Initialised once by management/events; conversions never read this field.
+  /// Disposal sets it to null without permitting a new binding in the old isolate.
+  late j.UsbHostProxy$Session? _reference = _bind();
   final _attached = StreamController<UsbDevice>.broadcast();
   final _detached = StreamController<UsbDevice>.broadcast();
 
-  AndroidUsb._() {
+  AndroidUsb._();
+
+  j.UsbHostProxy$Session _bind() {
     if (RootIsolateToken.instance == null) {
       throw StateError('USB objects must be used in the engine root isolate');
     }
     final engineId = PlatformDispatcher.instance.engineId;
     if (engineId == null) throw StateError('No Flutter engine is attached');
-    _reference = _java(() => j.UsbHostProxy.session(engineId))!;
+    final reference = _java(() => j.UsbHostProxy.session(engineId))!;
     final listener = j.UsbHostProxy$Events.implement(
       j.$UsbHostProxy$Events(
         attached$async: true,
@@ -129,10 +135,10 @@ final class AndroidUsb {
       ),
     );
     try {
-      _java(() => _session.listen(listener));
+      _java(() => reference.listen(listener));
+      return reference;
     } catch (_) {
-      _reference?.release();
-      _reference = null;
+      reference.release();
       rethrow;
     } finally {
       listener.release();
@@ -161,11 +167,22 @@ final class AndroidUsb {
     }
   }
 
-  Stream<UsbDevice> get deviceAttached => _attached.stream;
-  Stream<UsbDevice> get deviceDetached => _detached.stream;
+  @override
+  Stream<UsbDevice> get deviceAttached {
+    // Bind on first event access; an ended stream stays closed.
+    final _ = _reference;
+    return _attached.stream;
+  }
+
+  @override
+  Stream<UsbDevice> get deviceDetached {
+    final _ = _reference;
+    return _detached.stream;
+  }
 
   /// Keeps the returned Java views, releasing only the temporary JNI array.
-  Map<String, UsbDevice> getDeviceList() => _java(() {
+  @override
+  Future<Map<String, UsbDevice>> getDeviceList() async => _java(() {
     final array = _session.deviceList()!;
     try {
       final result = <String, UsbDevice>{};
@@ -196,17 +213,25 @@ final class AndroidUsb {
     return device;
   }
 
-  bool hasPermission(UsbDevice device) =>
+  @override
+  Future<bool> hasPermission(UsbDevice device) async =>
       _java(() => _session.hasPermission(_device(device).native));
 
-  Future<bool> requestPermission(UsbDevice device) => _call(
-    (callback) => _session.requestPermission(_device(device).native, callback),
-    _boolean,
-  );
+  @override
+  Future<bool> requestPermission(UsbDevice device) async {
+    final session = _session;
+    return _call(
+      (callback) => session.requestPermission(_device(device).native, callback),
+      _boolean,
+    );
+  }
 
-  Future<UsbDeviceConnection?> openDevice(UsbDevice device) => _call(
-    (callback) => _session.open(_device(device).native, callback),
-    (value) {
+  @override
+  Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
+    final session = _session;
+    return _call((callback) => session.open(_device(device).native, callback), (
+      value,
+    ) {
       if (value == null) return null;
       final native = value.as(j.UsbHostProxy$Connection.type);
       try {
@@ -216,10 +241,11 @@ final class AndroidUsb {
         native.release();
         rethrow;
       }
-    },
-  );
+    });
+  }
 
-  static int deviceId(String name) => _java(() {
+  @override
+  Future<int> deviceId(String name) async => _java(() {
     final string = name.toJString();
     try {
       return j.UsbDevice.getDeviceId(string);
@@ -228,7 +254,8 @@ final class AndroidUsb {
     }
   });
 
-  static String? deviceName(int id) =>
+  @override
+  Future<String?> deviceName(int id) async =>
       _java(() => _string(j.UsbDevice.getDeviceName(id)));
 }
 

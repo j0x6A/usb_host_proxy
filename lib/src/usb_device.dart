@@ -1,6 +1,4 @@
-import 'dart:io';
-
-import 'android/android_usb.dart';
+import 'usb_backend_selector.dart';
 import 'usb_configuration.dart';
 import 'usb_interface.dart';
 
@@ -82,15 +80,11 @@ abstract class UsbDevice {
 
   /// Android's static getDeviceId(String), renamed to avoid an instance conflict.
   /// Does not enumerate devices or validate current presence. Non-Android returns -1.
-  static Future<int> getDeviceIdFromName(String name) async {
-    if (Platform.isAndroid) return AndroidUsb.deviceId(name);
-    return -1;
-  }
+  static Future<int> getDeviceIdFromName(String name) async =>
+      usbBackend.deviceId(name);
 
   /// Android's static getDeviceName(int), renamed to avoid an instance conflict.
   /// Does not enumerate devices or validate current presence. Non-Android returns null.
-  static Future<String?> getDeviceNameFromId(int id) async {
-    if (Platform.isAndroid) return AndroidUsb.deviceName(id);
-    return null;
-  }
+  static Future<String?> getDeviceNameFromId(int id) async =>
+      usbBackend.deviceName(id);
 }
