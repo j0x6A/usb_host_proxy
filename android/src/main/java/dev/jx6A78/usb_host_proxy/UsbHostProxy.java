@@ -456,20 +456,24 @@ public final class UsbHostProxy {
                 PendingIntent pendingIntent = PendingIntent.getBroadcast(context, request, intent, flags);
                 Permission permission = new Permission(device, pendingIntent, call);
                 permissions.put(request, permission);
-                workers.execute(() -> {
-                    UsbDevice descriptor;
-                    synchronized (Session.this) {
-                        if (!active || permissions.get(request) != permission) return;
-                        descriptor = device.descriptor();
-                    }
-                    try {
-                        manager.requestPermission(descriptor, pendingIntent);
-                    } catch (Throwable error) {
+                try {
+                    workers.execute(() -> {
+                        UsbDevice descriptor;
                         synchronized (Session.this) {
-                            if (permissions.remove(request, permission)) permission.finish(null, error);
+                            if (!active || permissions.get(request) != permission) return;
+                            descriptor = device.descriptor();
                         }
-                    }
-                });
+                        try {
+                            manager.requestPermission(descriptor, pendingIntent);
+                        } catch (Throwable error) {
+                            synchronized (Session.this) {
+                                if (permissions.remove(request, permission)) permission.finish(null, error);
+                            }
+                        }
+                    });
+                } catch (Throwable error) {
+                    if (permissions.remove(request, permission)) permission.finish(null, error);
+                }
             } catch (Throwable error) {
                 call.finish(null, error);
             }
@@ -528,10 +532,12 @@ public final class UsbHostProxy {
         private synchronized void work(Completion completion, Callable<Object> operation) {
             Call call = new Call(this, completion);
             if (!active) { call.finish(null, new IllegalStateException("USB session has ended")); return; }
-            workers.execute(() -> {
-                try { call.finish(operation.call(), null); }
-                catch (Throwable error) { call.finish(null, error); }
-            });
+            try {
+                workers.execute(() -> {
+                    try { call.finish(operation.call(), null); }
+                    catch (Throwable error) { call.finish(null, error); }
+                });
+            } catch (Throwable error) { call.finish(null, error); }
         }
 
         /**
@@ -783,21 +789,23 @@ public final class UsbHostProxy {
             synchronized (owner) {
                 Call call = new Call(owner, completion);
                 if (closing) { call.finish(null, new IllegalStateException("USB connection is closed or detached")); return; }
-                owner.workers.execute(() -> {
-                    try {
-                        checkOpen();
-                        Object value;
-                        nativeLifetime.readLock().lock();
+                try {
+                    owner.workers.execute(() -> {
                         try {
-                            synchronized (owner) {
-                                owner.checkActive();
-                                checkOpen();
-                            }
-                            value = operation.call();
-                        } finally { nativeLifetime.readLock().unlock(); }
-                        call.finish(value, null);
-                    } catch (Throwable error) { call.finish(null, error); }
-                });
+                            checkOpen();
+                            Object value;
+                            nativeLifetime.readLock().lock();
+                            try {
+                                synchronized (owner) {
+                                    owner.checkActive();
+                                    checkOpen();
+                                }
+                                value = operation.call();
+                            } finally { nativeLifetime.readLock().unlock(); }
+                            call.finish(value, null);
+                        } catch (Throwable error) { call.finish(null, error); }
+                    });
+                } catch (Throwable error) { call.finish(null, error); }
             }
         }
 
@@ -848,24 +856,33 @@ public final class UsbHostProxy {
                 }
                 if (closing) return;
                 closing = true;
-                owner.workers.execute(() -> {
-                    Throwable error = null;
-                    nativeLifetime.writeLock().lock();
-                    try {
-                        connection.close();
-                    } catch (Throwable failure) { error = failure; }
-                    finally {
-                        connection = null;
-                        nativeLifetime.writeLock().unlock();
-                    }
-                    synchronized (owner) {
-                        closed = true;
-                        owner.connections.remove(this);
-                        if (error != null) Log.w("UsbHostProxy", "USB connection close failed", error);
-                        for (Call waiter : closeWaiters) waiter.finish(null, error);
-                        closeWaiters.clear();
-                    }
-                });
+                try {
+                    owner.workers.execute(() -> {
+                        Throwable error = null;
+                        nativeLifetime.writeLock().lock();
+                        try {
+                            connection.close();
+                        } catch (Throwable failure) { error = failure; }
+                        finally {
+                            connection = null;
+                            nativeLifetime.writeLock().unlock();
+                        }
+                        synchronized (owner) {
+                            closed = true;
+                            owner.connections.remove(this);
+                            if (error != null) Log.w("UsbHostProxy", "USB connection close failed", error);
+                            for (Call waiter : closeWaiters) waiter.finish(null, error);
+                            closeWaiters.clear();
+                        }
+                    });
+                } catch (Throwable error) {
+                    // Native close never started. Retain the handle and allow another submission.
+                    ArrayList<Call> waiters = new ArrayList<>(closeWaiters);
+                    closeWaiters.clear();
+                    closing = false;
+                    Log.w("UsbHostProxy", "USB connection close submission failed", error);
+                    for (Call waiter : waiters) waiter.finish(null, error);
+                }
             }
         }
     }

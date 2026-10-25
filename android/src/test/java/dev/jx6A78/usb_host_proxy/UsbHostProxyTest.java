@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 import static org.robolectric.Shadows.shadowOf;
+import static org.robolectric.util.ReflectionHelpers.getField;
 
 import android.app.PendingIntent;
 import android.content.Context;
@@ -19,9 +20,12 @@ import android.os.Looper;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -32,6 +36,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLog;
 
 /**
  * Backend contract tests using mocked USB objects, not physical USB or Dart-JNI calls.
@@ -1330,6 +1335,289 @@ public class UsbHostProxyTest {
         doAnswer(call -> { original.shutdown(); return null; }).when(controlled).shutdown();
         field.set(session, controlled);
         return tasks;
+    }
+
+    /** Rejects only the next dispatch; subsequent tasks remain under test control. */
+    private ExecutorService rejectNextWorker(LinkedBlockingQueue<Runnable> tasks, Throwable error) {
+        ExecutorService workers = getField(session, "workers");
+        doThrow(error).doAnswer(call -> { tasks.add(call.getArgument(0)); return null; })
+            .when(workers).execute(any(Runnable.class));
+        return workers;
+    }
+
+    @Test public void rejectedOpenSettlesItsCallWithoutCallingAndroid() throws Exception {
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        RejectedExecutionException error = new RejectedExecutionException("open rejected");
+        rejectNextWorker(tasks, error);
+        Result failed = new Result();
+        session.open(device, failed);
+        assertSame(error, failed.await().error);
+        assertEquals(1, failed.completions);
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        verify(manager, never()).openDevice(any(UsbDevice.class));
+
+        Result retry = new Result();
+        session.open(device, retry);
+        tasks.remove().run();
+        assertNull(retry.await().error);
+        UsbHostProxy.Connection connection = (UsbHostProxy.Connection) retry.value;
+        assertNotNull(connection);
+        Result closed = new Result();
+        connection.close(closed);
+        tasks.remove().run();
+        assertNull(closed.await().error);
+        assertEquals(1, failed.completions);
+    }
+
+    @Test public void rejectedPermissionCancelsItsIntentAndAllowsAFreshDecision() throws Exception {
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        ExecutorService workers = getField(session, "workers");
+        RejectedExecutionException error = new RejectedExecutionException("permission rejected");
+        AtomicReference<PendingIntent> cancelled = new AtomicReference<>();
+        doAnswer(call -> {
+            Map<?, ?> permissions = getField(session, "permissions");
+            cancelled.set(getField(permissions.values().iterator().next(), "intent"));
+            throw error;
+        }).doAnswer(call -> { tasks.add(call.getArgument(0)); return null; })
+            .when(workers).execute(any(Runnable.class));
+        Result failed = new Result();
+        session.requestPermission(device, failed);
+        assertSame(error, failed.await().error);
+        assertEquals(1, failed.completions);
+        assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        assertNotNull(cancelled.get());
+        assertThrows(PendingIntent.CanceledException.class, () -> cancelled.get().send());
+        verify(manager, never()).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
+
+        AtomicReference<PendingIntent> accepted = new AtomicReference<>();
+        doAnswer(call -> { accepted.set(call.getArgument(1)); return null; })
+            .when(manager).requestPermission(eq(usb), any(PendingIntent.class));
+        Result retry = new Result();
+        Result shared = new Result();
+        session.requestPermission(device, retry);
+        session.requestPermission(device, shared);
+        assertEquals(1, tasks.size());
+        tasks.remove().run();
+        when(manager.hasPermission(usb)).thenReturn(true);
+        accepted.get().send(context, 0, new Intent()
+            .putExtra(UsbManager.EXTRA_DEVICE, usb)
+            .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(true, retry.await().value);
+        assertEquals(true, shared.await().value);
+        assertEquals(1, failed.completions);
+        assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+    }
+
+    @Test public void rejectedSessionWorkSettlesItsCallWithoutReadingTheDevice() throws Exception {
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        RejectedExecutionException error = new RejectedExecutionException("serial rejected");
+        rejectNextWorker(tasks, error);
+        Result failed = new Result();
+        device.serial(failed);
+        assertSame(error, failed.await().error);
+        assertEquals(1, failed.completions);
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        verify(usb, never()).getSerialNumber();
+
+        when(usb.getSerialNumber()).thenReturn("serial");
+        Result retry = new Result();
+        device.serial(retry);
+        tasks.remove().run();
+        assertEquals("serial", retry.await().value);
+        assertNull(retry.error);
+        assertEquals(1, failed.completions);
+    }
+
+    @Test public void rejectedConnectionWorkSettlesItsCallWithoutCallingAndroid() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbInterface intf = mock(UsbInterface.class);
+        UsbHostProxy.Interface argument = interfaceView(intf);
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        RejectedExecutionException error = new RejectedExecutionException("claim rejected");
+        rejectNextWorker(tasks, error);
+        Result failed = new Result();
+        connection.claimInterface(argument, true, failed);
+        assertSame(error, failed.await().error);
+        assertEquals(1, failed.completions);
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        verifyNoInteractions(nativeConnection);
+
+        when(nativeConnection.claimInterface(intf, true)).thenReturn(true);
+        Result retry = new Result();
+        connection.claimInterface(argument, true, retry);
+        tasks.remove().run();
+        assertEquals(true, retry.await().value);
+        assertNull(retry.error);
+        verify(nativeConnection).claimInterface(intf, true);
+        Result closed = new Result();
+        connection.close(closed);
+        tasks.remove().run();
+        assertNull(closed.await().error);
+        assertEquals(1, failed.completions);
+    }
+
+    @Test public void rejectedCloseRetainsTheHandleAndAllowsAnotherSubmission() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        RejectedExecutionException error = new RejectedExecutionException("close rejected");
+        rejectNextWorker(tasks, error);
+        Result failed = new Result();
+        connection.close(failed);
+        assertSame(error, failed.await().error);
+        assertEquals(1, failed.completions);
+        assertFalse((Boolean) getField(connection, "closing"));
+        assertFalse((Boolean) getField(connection, "closed"));
+        assertSame(nativeConnection, getField(connection, "connection"));
+        assertTrue(((Set<?>) getField(session, "connections")).contains(connection));
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(((java.util.List<?>) getField(connection, "closeWaiters")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        verify(nativeConnection, never()).close();
+        when(nativeConnection.getFileDescriptor()).thenReturn(23);
+        assertEquals(23, connection.fileDescriptor());
+
+        Result retry = new Result();
+        Result shared = new Result();
+        connection.close(retry);
+        connection.close(shared);
+        assertEquals(1, tasks.size());
+        assertThrows(IllegalStateException.class, connection::fileDescriptor);
+        tasks.remove().run();
+        assertNull(retry.await().error);
+        assertNull(shared.await().error);
+        assertEquals(1, failed.completions);
+        verify(nativeConnection, times(1)).close();
+        assertNull(getField(connection, "connection"));
+        assertFalse(((Set<?>) getField(session, "connections")).contains(connection));
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+    }
+
+    @Test public void rejectedDetachCloseDoesNotStopOtherClosesOrTheEvent() throws Exception {
+        assertRejectedLifecycleCloseDoesNotStopCleanup(false);
+    }
+
+    @Test public void rejectedDisposeCloseDoesNotStopOtherClosesOrSessionCleanup() throws Exception {
+        assertRejectedLifecycleCloseDoesNotStopCleanup(true);
+    }
+
+    /** Checks cleanup continuity without assuming HashSet connection iteration order. */
+    private void assertRejectedLifecycleCloseDoesNotStopCleanup(boolean dispose) throws Exception {
+        UsbHostProxy.Connection first = open();
+        UsbDeviceConnection otherNative = mock(UsbDeviceConnection.class);
+        when(manager.openDevice(usb)).thenReturn(otherNative);
+        UsbHostProxy.Connection second = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result pending = new Result();
+        device.serial(pending);
+        Result permission = new Result();
+        session.requestPermission(device, permission);
+        RejectedExecutionException error = new RejectedExecutionException("cleanup close rejected");
+        ExecutorService workers = rejectNextWorker(tasks, error);
+        if (dispose) {
+            UsbHostProxy.detach(42);
+            verify(events).disposed();
+            verify(workers).shutdown();
+            assertNull(getField(session, "events"));
+            assertThrows(IllegalStateException.class, () -> UsbHostProxy.session(42));
+            assertTrue(permission.await().error instanceof IllegalStateException);
+        } else {
+            detachDevice();
+            verify(events).detached(device);
+            verify(workers, never()).shutdown();
+            assertTrue(((Map<?, ?>) getField(session, "devices")).isEmpty());
+            assertEquals(false, permission.await().value);
+            assertNull(permission.error);
+        }
+        assertFalse(device.lifetime.isAlive());
+        assertNull(storedDescriptor(device));
+        verify(nativeConnection, never()).close();
+        verify(otherNative, never()).close(); // Rejection must never run close inline.
+        assertEquals(3, tasks.size()); // Serial, permission submission and one accepted close.
+        assertTrue(ShadowLog.getLogsForTag("UsbHostProxy").stream()
+            .anyMatch(item -> item.throwable == error));
+        while (!tasks.isEmpty()) tasks.remove().run();
+        assertTrue(pending.await().error instanceof IllegalStateException);
+        assertEquals(1, pending.completions);
+        assertEquals(1, permission.completions);
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
+
+        UsbHostProxy.Connection rejected = (Boolean) getField(first, "closed") ? second : first;
+        UsbHostProxy.Connection closed = rejected == first ? second : first;
+        UsbDeviceConnection rejectedNative = rejected == first ? nativeConnection : otherNative;
+        UsbDeviceConnection closedNative = rejected == first ? otherNative : nativeConnection;
+        assertFalse((Boolean) getField(rejected, "closing"));
+        assertFalse((Boolean) getField(rejected, "closed"));
+        assertSame(rejectedNative, getField(rejected, "connection"));
+        assertNull(getField(closed, "connection"));
+        verify(closedNative, times(1)).close();
+        verify(rejectedNative, never()).close();
+        assertThrows(IllegalStateException.class, rejected::fileDescriptor);
+
+        Result retry = new Result();
+        if (dispose) {
+            // A terminated pool cannot accept a retry; it must still report the error.
+            RejectedExecutionException ended = new RejectedExecutionException("pool shut down");
+            doThrow(ended).when(workers).execute(any(Runnable.class));
+            rejected.close(retry);
+            assertSame(ended, retry.await().error);
+            verify(rejectedNative, never()).close();
+        } else {
+            // Existing absence reconciliation can retry a close that was not submitted.
+            assertEquals(0, session.deviceList().length);
+            rejected.close(retry);
+            assertEquals(1, tasks.size());
+            tasks.remove().run();
+            assertNull(retry.await().error);
+            verify(rejectedNative, times(1)).close();
+        }
+        assertEquals(1, retry.completions);
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        verifyNoMoreInteractions(events);
+    }
+
+    @Test public void workerStartupErrorsAlsoSettleAllFiveSubmissionPaths() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        ExecutorService workers = getField(session, "workers");
+        OutOfMemoryError error = new OutOfMemoryError("simulated worker startup failure");
+        doThrow(error).when(workers).execute(any(Runnable.class));
+        Result opened = new Result();
+        Result permission = new Result();
+        Result deviceSerial = new Result();
+        Result connectionSerial = new Result();
+        Result closed = new Result();
+        session.open(device, opened);
+        session.requestPermission(device, permission);
+        device.serial(deviceSerial);
+        connection.serial(connectionSerial);
+        connection.close(closed);
+        for (Result result : new Result[] {opened, permission, deviceSerial, connectionSerial, closed}) {
+            assertSame(error, result.await().error);
+            assertEquals(1, result.completions);
+        }
+        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
+        assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
+        assertTrue(tasks.isEmpty());
+        verify(usb, never()).getSerialNumber();
+        verify(manager, times(1)).openDevice(usb); // Only the setup open reached Android.
+        verify(manager, never()).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
+        verifyNoInteractions(nativeConnection);
+        doAnswer(call -> { tasks.add(call.getArgument(0)); return null; })
+            .when(workers).execute(any(Runnable.class));
+        Result retry = new Result();
+        connection.close(retry);
+        tasks.remove().run();
+        assertNull(retry.await().error);
     }
 
     /** Adds an original descriptor; alternate settings can deliberately share a number. */
