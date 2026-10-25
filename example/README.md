@@ -181,12 +181,17 @@ lazy console rows with complete history and scrolling after multiline log bursts
 Color tests include exception text resembling a USB/success message to ensure
 text content never determines the category.
 `test/transfer_buffer_test.dart` separately checks the library's pure Dart transport
-slice/copy-back helpers and unchanged non-Android request placeholders; it does
+slice/copy-back helpers, early rejection of non-empty read-only IN destinations,
+read-only OUT/empty IN behavior and unchanged non-Android request placeholders; it does
 not submit transfers through this screen. Java `UsbTransportTest` covers the
 mocked native transport boundary on API 28, 31, 33 and 35.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor validation, ordering and lifecycle independently of the UI.
+The native close/active-I/O lifetime issue is deferred, not resolved. Neither
+suite establishes its safety, and this example does not exercise USB transport.
+See the [deferred issue in the plugin README](../README.md#deferred-issue-native-closeio-lifetime)
+before planning transport teardown tests on hardware.
 
 With dependencies and Android tooling already available, run from `example/`:
 

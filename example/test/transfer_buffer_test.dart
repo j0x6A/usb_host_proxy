@@ -40,6 +40,54 @@ void main() {
   });
 
   test(
+    'Non-empty read-only IN slices fail before submission, without mutation',
+    () {
+      final storage = Uint8List.fromList([9, 1, 128, 255, 8]);
+      final readOnly = storage.asUnmodifiableView();
+      final destinations = [
+        readOnly,
+        Uint8List.sublistView(readOnly, 1, 4),
+        readOnly.buffer.asUint8List(1, 3),
+      ];
+      // A sentinel for reaching the next step, not a mocked or real JNI submission.
+      var submitted = false;
+      for (final destination in destinations) {
+        expect(() {
+          final count = transferLength(destination, 1, 1);
+          checkInputBuffer(destination, 1, count);
+          submitted = true;
+        }, throwsArgumentError);
+      }
+      expect(submitted, isFalse);
+      expect(storage, [9, 1, 128, 255, 8]);
+    },
+  );
+
+  test('Writable IN views are checked without changing any bytes', () {
+    final storage = Uint8List.fromList([9, 1, 128, 255, 8]);
+    final destination = Uint8List.sublistView(storage, 1, 4);
+    checkInputBuffer(destination, 1, transferLength(destination, 1, 2));
+    expect(storage, [9, 1, 128, 255, 8]);
+    receiveBytes(destination, 1, [7], 1);
+    expect(storage, [9, 1, 7, 255, 8]);
+  });
+
+  test(
+    'Read-only OUT sources and zero-length IN slices retain their contract',
+    () {
+      final source = Uint8List.fromList([128, 255]).asUnmodifiableView();
+      // OUT only validates bounds and snapshots the source; it needs no write probe.
+      expect(transferLength(source, 0, null), 2);
+      expect(Uint8List.fromList(source), [128, 255]);
+      checkInputBuffer(source, 1, transferLength(source, 1, 0));
+      final empty = Uint8List(0).asUnmodifiableView();
+      checkInputBuffer(empty, 0, transferLength(empty, 0, null));
+      checkInputBuffer(null, 0, transferLength(null, 0, null));
+      expect(source, [128, 255]);
+    },
+  );
+
+  test(
     'Only the completed IN prefix changes; negative and zero results do not',
     () {
       final target = Uint8List.fromList([9, 9, 9, 9, 9]);

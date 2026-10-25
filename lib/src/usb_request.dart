@@ -61,7 +61,10 @@ class UsbRequest {
   /// OUT bytes are snapshotted at submission. IN bytes are copied back into the
   /// supplied slice only when requestWait delivers completion. Do not modify or
   /// reuse that slice/request until then. Null denotes a zero-length request.
-  /// IN requires a writable Uint8List, not an unmodifiable view.
+  /// Non-empty IN requires a writable Uint8List; read-only views fail with
+  /// ArgumentError before native allocation/queueing. Read-only OUT is supported.
+  /// The app's targetSdk <28 makes Android reject buffers above 16,384 bytes,
+  /// even on an API 28+ device. The plugin does not add its own size limit.
   /// False and exceptions preserve the previous completion and buffer ownership.
   Future<bool> queue(Uint8List? buffer, {int offset = 0, int? length}) async {
     if (Platform.isAndroid) {
@@ -86,6 +89,9 @@ class UsbRequest {
   /// Android close is idempotent, does not await requestWait and invalidates any
   /// outstanding Dart result. Connection close/detach also closes native requests.
   /// Native close/cancel races retain platform outcomes; no timeout is added.
+  /// WARNING: close while a native request is pending or being reaped has an
+  /// unresolved native lifetime race; a successful mock test does not establish safety.
+  /// Resolution is deferred; close does not add an automatic cancel/drain sequence.
   Future<void> close() async {
     if (Platform.isAndroid) await AndroidUsb.request(this).close();
   }

@@ -1,5 +1,11 @@
 ## 0.2.0 (unreleased)
 
+- Reject non-empty read-only Dart IN buffers before native submission; preserve
+  read-only OUT and empty/null IN behavior, with buffer regression tests.
+- Clarify targetSdk-dependent bulk/request compatibility limits and record the
+  unresolved native close/I/O lifetime race; no close-policy change is made.
+- Mark close/I/O lifetime work as deferred, not resolved or waived; retain its
+  analysis and verification boundary without adding cancellation or synchronization.
 - Require Android API 28 (Android 9) or later in the plugin and diagnostic example.
 - Implement bulk/control transport and native UsbRequest initialize/queue/cancel/
   close/wait through JNIgen; keep blocking I/O on parallel session workers and

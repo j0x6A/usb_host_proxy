@@ -57,10 +57,12 @@ abstract class UsbDeviceConnection {
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
   /// OUT bytes are snapshotted before submission; IN copies only the completed
-  /// prefix into this slice. IN requires writable memory. Do not modify the
-  /// slice until the future completes.
+  /// prefix into this slice. Non-empty IN requires writable memory, checked
+  /// before native submission; read-only destinations fail with ArgumentError.
+  /// Do not modify the slice until the future completes.
   /// Null permits only an empty slice. Native byte counts (including negative
-  /// failure results) and exceptions are preserved; no 16 KiB limit is imposed.
+  /// failure results) and exceptions are preserved. The plugin adds no 16 KiB
+  /// limit, but Android truncates bulk lengths to 16,384 when the app targets <28.
   /// Runs on a session worker, in parallel with other transfers and management.
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
@@ -76,8 +78,9 @@ abstract class UsbDeviceConnection {
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
   /// Direction comes from bit 7 of [requestType]. OUT bytes are snapshotted;
   /// IN copies only the completed prefix. Null permits only an empty slice.
-  /// IN requires a writable buffer, not an unmodifiable view. Do not modify it
-  /// until completion. Native byte counts and exceptions are preserved.
+  /// Non-empty IN requires a writable buffer; read-only views fail with
+  /// ArgumentError before native submission. Do not modify it until completion.
+  /// Native byte counts and exceptions are preserved.
   /// Runs on a session worker, not the management FIFO.
   Future<int> controlTransfer(
     int requestType,
@@ -110,12 +113,15 @@ abstract class UsbDeviceConnection {
   /// to the callers awaiting that attempt. Later close calls remain safe.
   /// Detaching the device or ending the engine session also closes it.
   /// Explicit close drains already-accepted management work; detach or session
-  /// end rejects queued work before native access. A native call already running is not
-  /// forcibly interrupted. JNI finalization alone does not close the connection.
+  /// end rejects queued work before native access. A native call already running
+  /// is not forcibly interrupted. JNI finalization alone does not close the connection.
   /// Blocking transport is not joined or placed ahead of close in the FIFO.
   /// Native close decides how already-entered transfers/waits terminate; there
   /// is no watchdog, polling or added timeout. Native requests are also closed;
   /// no completion or IN data is fabricated for abandoned requests.
+  /// WARNING: concurrent native close and active I/O have an unresolved native
+  /// lifetime race. Do not rely on close as a safe transfer interruption mechanism.
+  /// Resolution is deferred; no new waiting or cancellation policy is introduced.
   Future<void> close();
 
   // Windows USB pipe extensions. Every method in this group currently fails

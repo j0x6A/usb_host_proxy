@@ -88,12 +88,23 @@ Native negative byte counts, false/null results and exceptions are preserved.
 Offsets are relative to the supplied `Uint8List`, including views into a larger
 allocation. Omitted length means the remaining slice. Invalid slices and values
 outside a JNI int's range fail before allocation/narrowing. Null buffers require
-offset/length zero. Android API 28+ has no library-imposed 16 KiB transport limit.
+offset/length zero. The plugin adds no 16 KiB transport limit. Android's bulk and
+request compatibility behavior depends on the consuming application's `targetSdk`,
+not only the device API or this library's `minSdk`. With `targetSdk < 28`, AOSP
+truncates bulk transfers to 16,384 bytes and rejects larger `UsbRequest.queue`
+buffers; `targetSdk >= 28` removes those compatibility limits. This does not make
+every size valid for hardware or remove native control-transfer constraints.
+The example inherits its target SDK from Flutter; the plugin does not override
+the consuming application's target. See the [AOSP bulk implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-9.0.0_r1/core/java/android/hardware/usb/UsbDeviceConnection.java)
+and [request implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-9.0.0_r1/core/java/android/hardware/usb/UsbRequest.java).
 Bulk direction comes from the endpoint; control direction comes from requestType.
 OUT data is copied at submission. IN copies only the completed prefix back to
 the requested slice, leaving the remainder and neighboring bytes unchanged.
 Do not mutate or reuse a buffer slice while its operation is pending.
-IN destinations must be writable, not unmodifiable Dart views.
+Non-empty IN destinations must be writable: read-only Dart views fail with
+ArgumentError before native allocation/submission. The writability probe assigns
+one byte its existing value without changing content; Dart has no public writable
+flag. Read-only OUT sources and empty/null IN slices remain accepted.
 
 Synchronous transfers borrow a separate Java byte array until the worker returns;
 the worker retains it even if engine shutdown has already failed the Dart future.
@@ -115,8 +126,8 @@ reusing that request before delivery would overwrite in-flight buffer ownership.
 `cancel()` forwards native acceptance and does not end the lease: collect its
 completion with `requestWait` before reusing it. An already-closed request or a
 connection being closed returns false from cancel without entering native cancel.
-Close an initialized request before
-reinitializing it. Explicit request close is idempotent and invalidates its pending
+Close an initialized request before reinitializing it. Explicit request close is
+idempotent and invalidates its pending
 Dart copy-back, without fabricating a wait result. Connection close/detach/session
 shutdown also close native requests. Close does not wait for blocking transport:
 Android/kernel determine how already-entered I/O ends. No bounded wake-up guarantee
@@ -126,6 +137,36 @@ so detach/session end also discard outstanding Dart buffer leases and request
 references even when the caller does not explicitly close the connection.
 
 The diagnostic example remains management-only; it does not submit transfers.
+
+### Deferred issue: native close/I/O lifetime
+
+**Status: deferred, not resolved or waived.** The project has suspended changes to
+this mechanism pending further analysis and a separate decision. No automatic
+cancel/drain sequence, new timeout or synchronization policy is approved here.
+
+Concurrent native close and transport are **not verified safe**. The current
+wrapper releases its lifecycle lock before entering blocking Android I/O. Holding
+a Java/JNI reference does not retain AOSP's underlying C `usb_device`: native close
+frees it, while bulk/control and request-wait code dereference it. Timed wait can
+access it again after poll. Request close also frees native request/URB metadata
+that a concurrent reap may still use. See [AOSP native connection code](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-9.0.0_r1/core/jni/android_hardware_UsbDeviceConnection.cpp)
+and [libusbhost lifetime and wait code](https://github.com/aosp-mirror/platform_system_core/blob/android-9.0.0_r1/libusbhost/usbhost.c).
+In the examined AOSP implementation, queue also creates a JNI global reference
+released by dequeue, not by native request close. Closing without draining a
+queued request can therefore leak that reference and its retained buffer/owners.
+See [AOSP request JNI ownership](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-9.0.0_r1/core/jni/android_hardware_UsbRequest.cpp).
+
+Kernel cleanup of USB operations when the open handle is finally released is
+separate from the lifetime of these AOSP userspace objects. Closing a descriptor
+is not a guarantee that concurrent JNI calls have returned. The concern is not
+that the plugin must duplicate the kernel's USB cancellation or interface cleanup.
+
+This is a source-level lifetime race, not a reproduced hardware crash. Robolectric
+mock results do not prove native memory safety. Do not treat close as a guaranteed
+safe way to interrupt active I/O. Any repair needs a separately agreed lifetime policy;
+simply holding a lock across an indefinite transfer/wait could prevent close
+forever. No particular cancellation/draining strategy has been selected, and no
+such policy or synchronization change has been introduced here.
 
 ## Management lifecycle and errors
 
@@ -299,6 +340,8 @@ non-Android request placeholders. They do not verify the JNI callback or direct
 buffer lifetime on hardware. On a device, also check IN/OUT bulk and control,
 short transfers, buffers above 16 KiB, multiple interrupt requests, cancellation,
 timed/indefinite waits and unplug/close while I/O is blocked.
+Buffer tests also cover early rejection of read-only IN views, including derived
+views, unchanged destination contents, read-only OUT and zero-length IN slices.
 
 ## References
 

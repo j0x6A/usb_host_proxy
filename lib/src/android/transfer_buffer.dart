@@ -11,6 +11,21 @@ int transferLength(Uint8List? buffer, int offset, int? length) {
   return count;
 }
 
+/// Rejects an unwritable non-empty IN slice before native allocation/submission.
+/// Bounds must already have been checked by [transferLength]. Dart exposes no
+/// writable flag: a same-value assignment checks the actual destination without
+/// changing its bytes or depending on private runtime types/view identity.
+/// Empty slices need no copy-back and retain their existing acceptance behavior.
+/// OUT callers must not use this check: immutable sources remain valid snapshots.
+void checkInputBuffer(Uint8List? buffer, int offset, int length) {
+  if (buffer == null || length == 0) return;
+  try {
+    buffer[offset] = buffer[offset];
+  } on UnsupportedError {
+    throw ArgumentError('buffer must be writable for a non-empty IN transfer');
+  }
+}
+
 /// Rejects values JNI would otherwise silently truncate. Does not impose USB limits.
 int jniInt(int value, String name) =>
     RangeError.checkValueInInterval(value, -0x80000000, 0x7fffffff, name);

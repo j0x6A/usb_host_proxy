@@ -484,6 +484,7 @@ final class _AndroidConnection implements UsbDeviceConnection {
     void Function(JByteArray?, int, j.UsbHostProxy$Completion) start,
   ) async {
     final count = transferLength(buffer, offset, length);
+    if (input) checkInputBuffer(buffer, offset, count);
     final bytes = buffer == null ? null : JByteArray(count);
     try {
       if (!input && count != 0) bytes!.setRange(0, count, buffer!, offset);
@@ -687,6 +688,7 @@ final class _AndroidRequest implements UsbRequest {
     final endpoint = getEndpoint();
     if (endpoint == null) throw StateError('USB request is closed');
     final input = endpoint.getDirection() == 0x80;
+    if (input) checkInputBuffer(buffer, offset, count);
     final bytes = buffer == null ? null : JByteBuffer.allocateDirect(count);
     try {
       if (!input && count != 0) {
