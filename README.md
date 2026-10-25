@@ -145,6 +145,11 @@ Native true/false/null results remain results. Exceptions are not changed into
 false: Java argument failures become `ArgumentError`, state failures become
 `StateError`, and other Java exceptions retain their details.
 
+A result already completed by Java is preserved even if Dart receives it after
+detach. It reports the completed operation, not continued device availability.
+New native access through an invalidated view still fails with `StateError`.
+A non-null Open result is not adopted after invalidation; Java owns its cleanup.
+
 Claim, Release and setting selection go directly to Android. There is no local
 claim-state machine, automatic recovery, prior-Claim requirement or check that a
 descriptor reference occurs in the connection's descriptor tree. Arguments must
@@ -184,6 +189,9 @@ permission/open work for that name, even if the latest list contains it again.
 close has finished. Its payload has no JNI handles; use `getDeviceName()` for
 identification. Cleanup runs without stream subscribers. The manager and system
 event receivers remain active even when no devices are present.
+If a newer view of a same-name device has already reached Dart, a queued detach
+for the old view is not forwarded to subscribers; it must not clear the newer
+selection or close the newer connection.
 
 A late native open result is closed before reporting the failed open. Session
 shutdown fails pending calls immediately and still cleans late results. Name

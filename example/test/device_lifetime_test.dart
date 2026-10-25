@@ -23,6 +23,46 @@ void main() {
     );
   });
 
+  for (final value in <Object?>[true, false, null, 'native serial']) {
+    test(
+      'completed native result $value survives delayed delivery after detach',
+      () async {
+        final nativeResult = Completer<Object?>();
+        final operation = lifetime.run(() => nativeResult.future);
+        nativeResult.complete(value);
+        lifetime.invalidate();
+        expect(await operation, value);
+        expect(releasedTag, 1);
+      },
+    );
+  }
+
+  test(
+    'an admitted operation preserves its failure after invalidation',
+    () async {
+      final nativeResult = Completer<bool>();
+      final failure = ArgumentError('native failure');
+      final operation = lifetime.run(() => nativeResult.future);
+      final assertion = expectLater(operation, throwsA(same(failure)));
+      nativeResult.completeError(failure);
+      lifetime.invalidate();
+      await assertion;
+    },
+  );
+
+  test('a new operation on an invalidated owner is not submitted', () async {
+    lifetime.invalidate();
+    var submitted = false;
+    await expectLater(
+      lifetime.run(() {
+        submitted = true;
+        return Future.value(true);
+      }),
+      throwsStateError,
+    );
+    expect(submitted, isFalse);
+  });
+
   test(
     'invalidation releases every live descriptor reference exactly once',
     () {
@@ -106,9 +146,22 @@ void main() {
       );
       final current = DeviceReference(replacement, 'new', (_) {});
       lifetime.invalidate(); // A late duplicate removal belongs only to the old owner.
+      expect(lifetime.isSupersededBy(replacement), isTrue);
       expect(() => old.value, throwsStateError);
       expect(current.value, 'new');
       replacement.invalidate();
+      expect(lifetime.isSupersededBy(replacement), isFalse);
+    },
+  );
+
+  test(
+    'a current removal or removal without a replacement is still deliverable',
+    () {
+      expect(lifetime.isSupersededBy(lifetime), isFalse);
+      expect(lifetime.isSupersededBy(null), isFalse);
+      lifetime.invalidate();
+      expect(lifetime.isSupersededBy(lifetime), isFalse);
+      expect(lifetime.isSupersededBy(null), isFalse);
     },
   );
 

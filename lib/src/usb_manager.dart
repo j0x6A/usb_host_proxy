@@ -49,6 +49,8 @@ class UsbManager {
   /// The payload retains only its name, equality and hash, without JNI handles.
   /// Cleanup does not require a subscriber. The manager remains usable when the
   /// device list becomes empty.
+  /// An old queued detach is not forwarded after a newer same-name device view
+  /// has already been exposed to Dart through enumeration or an attach event.
   Stream<UsbDevice> get deviceDetached => Platform.isAndroid
       ? AndroidUsb.instance.deviceDetached
       : const Stream<UsbDevice>.empty();
@@ -88,8 +90,9 @@ class UsbManager {
   /// No timeout is imposed and an already-authorized attachment completes true.
   /// Another engine's device or a foreign implementation fails before native access.
   /// Starting a new request with an invalidated device fails with [StateError].
-  /// A successful reply delivered after invalidation also fails with [StateError];
-  /// the false result of a pending request cancelled by detach is preserved.
+  /// A decision already completed by Java is preserved despite delayed delivery;
+  /// it does not guarantee the device is still present. A pending request cancelled
+  /// by detach resolves false.
   /// Other platforms currently return false without requesting anything.
   Future<bool> requestPermission(UsbDevice device) async {
     if (Platform.isAndroid) {

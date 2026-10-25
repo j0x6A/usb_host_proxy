@@ -63,9 +63,9 @@ between sessions; it is not a USB identity. A reply must match the route/request
 carry the expected name and report access that Android still confirms.
 
 A pending request cancelled by detach resolves false. Starting another request
-with an invalidated view fails with `StateError`. If a successful reply was
-already queued for Dart when the device ended, Dart rejects that late success
-instead of reporting access to an invalidated device.
+with an invalidated view fails with `StateError`. A decision already completed
+by Java keeps its result even if Dart receives it after removal; the result is
+an observation at completion, not a lease on permission or device presence.
 
 `Call.openingName` is set for a pending open. Detach clears it under the session
 monitor, cancelling that attempt. All saved views of the removed device are also
@@ -125,13 +125,19 @@ arguments are released after decoding. Each adapter registers its owned JNI
 references weakly with a shared Dart `DeviceLifetime`; unused wrappers can still
 be collected normally instead of accumulating until unplug.
 
-The Java flag is checked before native access, including before asynchronous
-success decoding. Removal releases device and child references explicitly. Only
+The Java flag is checked before new native access. Scalar completion results
+and exceptions are preserved without a second validity check during decoding.
+Adopting a non-null Open result still checks its lifetime: a handle already
+invalidated and scheduled for close by Java must not be revived in Dart.
+Removal releases device and child references explicitly. Only
 the device's name, equality and hash survive; descriptor getters fail with
 `StateError`. The detach callback performs cleanup even when public streams have
 no subscribers, and emits a metadata-only device. Engine disposal invalidates
 all owners before releasing the session reference. A late callback for an ended
 owner cannot invalidate a different current owner with the same name.
+If a newer same-name owner has already been exposed to Dart, the old detach is
+not forwarded to public subscribers. Its reference cleanup still runs, but a
+name-only event must not cause the UI to discard the newer device/connection.
 
 Connection invalidation starts the existing Java close operation; the Dart
 connection handle is released when its close future settles. Java workers and

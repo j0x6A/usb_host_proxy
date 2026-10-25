@@ -103,18 +103,12 @@ bool _boolean(JObject? value) =>
 String? _resultString(JObject? value) =>
     value?.as(JString.type).use((v) => v.toDartString());
 
-/// Does not publish successful results belonging to a device that has since ended.
+/// Checks admission without changing Java results because delivery was delayed.
 Future<T> _deviceCall<T>(
   DeviceLifetime lifetime,
   void Function(j.UsbHostProxy$Completion) start,
   T Function(JObject? value) decode,
-) async {
-  lifetime.checkAlive();
-  return _call(start, (value) {
-    lifetime.checkAlive();
-    return decode(value);
-  });
-}
+) => lifetime.run(() => _call(start, decode));
 
 /// Reports automatic cleanup failures through Flutter's existing error handler.
 void _cleanupError(Object error, StackTrace stack) {
@@ -258,6 +252,12 @@ final class AndroidUsb {
     try {
       final lifetime = _lifetime(device);
       if (detached) lifetime.invalidate();
+      // Enumeration can expose a new owner before an old asynchronous detach
+      // callback arrives. Cleanup above still belongs to the old owner only.
+      if (detached &&
+          lifetime.isSupersededBy(_devices[lifetime.name]?.lifetime)) {
+        return;
+      }
       if (!stream.hasListener || stream.isClosed || _reference == null) return;
       if (detached) {
         stream.add(_AndroidDevice.detached(lifetime));
@@ -325,15 +325,10 @@ final class AndroidUsb {
   /// Awaits the coalesced native decision for this Android name, without a timeout.
   Future<bool> requestPermission(UsbDevice device) async {
     final selected = _device(device);
-    selected.lifetime.checkAlive();
-    // An already-pending permission request still resolves false on detach.
-    return _call(
+    return _deviceCall(
+      selected.lifetime,
       (callback) => _session.requestPermission(selected.handle, callback),
-      (value) {
-        final granted = _boolean(value);
-        if (granted) selected.lifetime.checkAlive();
-        return granted;
-      },
+      _boolean,
     );
   }
 
@@ -343,12 +338,16 @@ final class AndroidUsb {
     return _deviceCall(
       selected.lifetime,
       (callback) => _session.open(selected.handle, callback),
-      (value) => value == null
-          ? null
-          : _AndroidConnection(
-              value.as(j.UsbHostProxy$Connection.type),
-              selected.lifetime,
-            ),
+      (value) {
+        if (value == null) return null;
+        // Unlike scalar results, an escaping connection owns a JNI handle.
+        // Java already schedules its close on removal; never revive that owner.
+        selected.lifetime.checkAlive();
+        return _AndroidConnection(
+          value.as(j.UsbHostProxy$Connection.type),
+          selected.lifetime,
+        );
+      },
     );
   }
 

@@ -68,7 +68,8 @@ abstract class UsbDevice {
   ///
   /// Android reads the supplied framework object's serial on a worker after
   /// checking session ownership and device validity. This does not refresh the
-  /// descriptor by name. A late result for an invalidated device is rejected.
+  /// descriptor by name. Once Java completes the read, delayed delivery preserves
+  /// that result even if the device is subsequently invalidated.
   /// USB permission may be required; failures remain errors, not synthetic null.
   Future<String?> getSerialNumber();
 

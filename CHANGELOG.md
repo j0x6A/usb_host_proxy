@@ -1,5 +1,9 @@
 ## 0.2.0 (unreleased)
 
+- Preserve completed Java management/permission results across delayed Dart
+  delivery. Filter obsolete detach callbacks after a newer same-name resource
+  owner has reached Dart, while retaining cleanup of the removed owner's JNI
+  references. Keep native close ownership and admission checks unchanged.
 - End device/descriptor lifetimes on detach, observed absence and session end.
   Explicitly release their JNI references and start connection cleanup even
   without stream listeners. Retain only device name/equality/hash after removal;

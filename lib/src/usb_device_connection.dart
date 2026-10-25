@@ -10,8 +10,10 @@ import 'usb_request.dart';
 ///
 /// Android implements management and information operations through JNI.
 /// Transport and Windows extensions are not implemented by the Android backend.
-/// Implemented operations on a closed/detached Android connection fail with
-/// [StateError]. Unsupported members always fail with [UnsupportedError].
+/// New implemented operations on a closed/detached Android connection fail with
+/// [StateError]. Results already completed by Java are preserved even if their
+/// Dart delivery occurs after detach. Unsupported members always fail with
+/// [UnsupportedError].
 ///
 /// Android management operations run on the session's shared worker pool without
 /// FIFO ordering, including operations on the same connection. Await results

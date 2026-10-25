@@ -51,6 +51,18 @@ final class DeviceLifetime {
     if (!_active) throw StateError('USB device is detached: $name');
   }
 
+  /// Validates submission, not later delivery of a result already produced by Java.
+  /// Scalar results do not grant native access and remain valid after removal.
+  Future<T> run<T>(Future<T> Function() operation) async {
+    checkAlive();
+    return operation();
+  }
+
+  /// An old removal must not be applied to a newer owner already exposed to Dart.
+  /// This compares resource owners, not Android names or USB hardware identity.
+  bool isSupersededBy(DeviceLifetime? current) =>
+      current != null && !identical(this, current) && current.isActive;
+
   /// Late resources are invalidated immediately rather than reviving this owner.
   void register(DeviceResource resource) {
     if (!_active) {
