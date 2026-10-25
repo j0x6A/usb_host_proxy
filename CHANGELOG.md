@@ -1,22 +1,21 @@
 ## 0.2.0 (unreleased)
 
-- Reject non-empty read-only Dart IN buffers before native submission; preserve
-  read-only OUT and empty/null IN behavior, with buffer regression tests.
-- Clarify targetSdk-dependent bulk/request compatibility limits and record the
-  unresolved native close/I/O lifetime race; no close-policy change is made.
-- Mark close/I/O lifetime work as deferred, not resolved or waived; retain its
-  analysis and verification boundary without adding cancellation or synchronization.
+- Clarify management implementation versus test coverage, application-owned
+  targetSdk and unsupported-operation errors; add information/permission
+  regression tests without changing management behavior.
+- Withdraw experimental bulk/control/request transport and its JNI buffer,
+  completion-observer and request ownership state. Keep the public declarations:
+  Android connection transport is unsupported and UsbRequest is a no-op placeholder.
+- Retain management workers, Completion callbacks and the per-connection FIFO;
+  remove only transport-specific tests/helpers and regenerate private bindings.
+- Keep native close/active-transport investigation unresolved; this withdrawal
+  removes the affected implementation rather than changing its close policy.
+- Retain the existing single-root-isolate initialization and one listener per
+  engine; add regression coverage that a second listener cannot replace the first.
 - Require Android API 28 (Android 9) or later in the plugin and diagnostic example.
-- Implement bulk/control transport and native UsbRequest initialize/queue/cancel/
-  close/wait through JNIgen; keep blocking I/O on parallel session workers and
-  management/close on the existing per-connection FIFO.
-- Preserve native outcomes/timeouts and original Dart request/client-data identity;
-  retain Java-owned buffers through completion and copy only completed IN bytes.
-- Regenerate private bindings and test transport concurrency, cleanup, errors and
-  buffer boundaries without changing the management-only diagnostic UI or Windows.
 - Implement Android USB Host enumeration, descriptor access, permissions,
   connection management, interface/configuration selection and device events
-  using JNI/JNIgen.
+  using JNI/JNIgen, without data transport.
 - Keep blocking connection operations on independent per-connection queues;
   close connections on detach and engine shutdown/restart.
 - Identify observed attachments privately by `deviceName-UUID`, retaining the

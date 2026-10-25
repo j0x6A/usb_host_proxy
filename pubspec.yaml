@@ -1,5 +1,5 @@
 name: usb_host_proxy
-description: Android USB Host management and data transport through JNI. The Windows backend is not implemented.
+description: Android USB Host management through JNI. Data transport and the Windows backend are not implemented.
 version: 0.2.0
 publish_to: none
 

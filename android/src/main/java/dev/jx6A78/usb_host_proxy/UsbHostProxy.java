@@ -8,10 +8,8 @@ import android.content.IntentFilter;
 import android.hardware.usb.UsbConfiguration;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
-import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
-import android.hardware.usb.UsbRequest;
 import android.os.BadParcelableException;
 import android.os.Build;
 import android.util.Log;
@@ -21,13 +19,12 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.nio.ByteBuffer;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Android USB Host backend exposed to Dart through JNIgen.
+ * Android backend exposed to Dart through JNIgen, without USB data transport.
  *
  * <p>Framework USB objects remain the source of descriptor data. This class adds
  * attachment identity, engine ownership, permission callbacks and operation queues.
@@ -134,7 +131,7 @@ public final class UsbHostProxy {
         private final UsbManager manager;
         /** Unique reply action for this session, not an attachment identifier. */
         private final String permissionAction;
-        /** Parallel opening, serial reads, permission submission and blocking USB transport. */
+        /** Session-level work such as opening, device serial reads and permission submission. */
         private final ExecutorService workers = Executors.newCachedThreadPool();
         /** Name index of current wrappers; the name is a locator, not lifetime identity. */
         private final Map<String, Device> devices = new HashMap<>();
@@ -536,12 +533,8 @@ public final class UsbHostProxy {
         private boolean closing = false;
         /** Marks completion of the native close attempt, including a failed attempt. */
         private boolean closed = false;
-        /** Close callers/observers awaiting the same native close; session-monitor guarded. */
+        /** Close callers awaiting the same queued close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
-        /** Native requests, retained for identity and cleanup, not a USB scheduling queue. */
-        private final Set<Request> requests = new HashSet<>();
-        /** Connection-local request tokens used to recover the original Dart request object. */
-        private long nextRequest = 0;
 
         /** Takes ownership of a successfully opened native connection. */
         private Connection(Session owner, Device device, UsbDeviceConnection connection) {
@@ -642,111 +635,6 @@ public final class UsbHostProxy {
             });
         }
 
-        /** Validates endpoint reference ownership, not just a reusable endpoint address. */
-        private void checkEndpoint(UsbEndpoint endpoint) {
-            for (int i = 0; i < device.usbDevice.getInterfaceCount(); i++) {
-                UsbInterface intf = device.usbDevice.getInterface(i);
-                for (int e = 0; e < intf.getEndpointCount(); e++) {
-                    if (intf.getEndpoint(e) == endpoint) return;
-                }
-            }
-            throw new IllegalArgumentException("Endpoint belongs to another device attachment");
-        }
-
-        /** Allows checked native wait exceptions to reach Completion without wrapping. */
-        private interface TransferOperation {
-            Object run(UsbDeviceConnection current) throws Exception;
-        }
-
-        /**
-         * Takes a strong framework reference under the lifecycle locks, then runs outside
-         * them on Session.workers. Blocking I/O never occupies the management queue or
-         * prevents native close/cancel. Android decides how an already-entered call ends.
-         */
-        private void transport(Completion completion, TransferOperation operation) {
-            synchronized (owner) {
-                owner.work(completion, () -> {
-                    UsbDeviceConnection current;
-                    synchronized (owner) {
-                        owner.checkDevice(device);
-                        synchronized (readLock) { checkOpen(); current = connection; }
-                    }
-                    return operation.run(current);
-                });
-            }
-        }
-
-        /** Forwards the native array overload; the worker owns its Java array reference. */
-        public void bulk(UsbEndpoint endpoint, byte[] buffer, int offset, int length, int timeout, Completion completion) {
-            transport(completion, current -> {
-                checkEndpoint(endpoint);
-                return current.bulkTransfer(endpoint, buffer, offset, length, timeout);
-            });
-        }
-
-        /** Direction is encoded in requestType, not inferred from buffer contents. */
-        public void control(int requestType, int request, int value, int index, byte[] buffer,
-                int offset, int length, int timeout, Completion completion) {
-            transport(completion, current -> current.controlTransfer(
-                    requestType, request, value, index, buffer, offset, length, timeout));
-        }
-
-        /**
-         * Null timeout in Dart selects Android's no-argument overload. Timed waits use
-         * the long overload unchanged, including native TimeoutException and zero polls.
-         */
-        public void waitRequest(boolean timed, long timeout, Completion completion) {
-            transport(completion, current -> {
-                UsbRequest completed = timed ? current.requestWait(timeout) : current.requestWait();
-                if (completed == null) return null;
-                Object data = completed.getClientData();
-                if (!(data instanceof Request) || ((Request) data).owner != this) {
-                    throw new IllegalArgumentException("Completed request belongs to another connection");
-                }
-                return ((Request) data).completed();
-            });
-        }
-
-        /** Creates one native request; failure preserves false as a null owner result. */
-        public Request initializeRequest(UsbEndpoint endpoint) {
-            synchronized (owner) {
-                owner.checkDevice(device);
-                synchronized (readLock) {
-                    checkOpen();
-                    checkEndpoint(endpoint);
-                    UsbRequest nativeRequest = new UsbRequest();
-                    try {
-                        if (!nativeRequest.initialize(connection, endpoint)) {
-                            nativeRequest.close();
-                            return null;
-                        }
-                        Request result = new Request(this, nativeRequest, nextRequest++);
-                        nativeRequest.setClientData(result);
-                        requests.add(result);
-                        return result;
-                    } catch (Throwable error) {
-                        try { nativeRequest.close(); }
-                        catch (Throwable cleanup) { if (cleanup != error) error.addSuppressed(cleanup); }
-                        throw error;
-                    }
-                }
-            }
-        }
-
-        /** Observes cleanup without initiating close; also releases Dart buffer leases on detach. */
-        public void whenClosed(Completion completion) {
-            synchronized (owner) {
-                Call call = new Call(owner, completion);
-                if (!owner.active) {
-                    call.finish(null, new IllegalStateException("USB session has ended"));
-                } else if (closed) {
-                    call.finish(null, null);
-                } else {
-                    closeWaiters.add(call);
-                }
-            }
-        }
-
         /**
          * Schedules one native close after accepted work; concurrent callers share its result.
          * A null completion is used by lifecycle cleanup. Already-closed calls succeed;
@@ -770,13 +658,6 @@ public final class UsbHostProxy {
                             synchronized (readLock) { connection.close(); }
                         } catch (Throwable failure) { error = failure; }
                         synchronized (owner) {
-                            for (Request request : new ArrayList<>(requests)) {
-                                try { request.close(); }
-                                catch (Throwable failure) {
-                                    if (error == null) error = failure;
-                                    else if (failure != error) error.addSuppressed(failure);
-                                }
-                            }
                             synchronized (readLock) { connection = null; closed = true; }
                             owner.connections.remove(this);
                             for (Call waiter : closeWaiters) waiter.finish(null, error);
@@ -786,104 +667,6 @@ public final class UsbHostProxy {
                     queue.shutdown();
                 }
             }
-        }
-    }
-
-    /** One native request and its currently borrowed direct buffer; no USB work queue. */
-    public static final class Request {
-        /** Lock order is session -> connection.readLock; blocking waits take neither. */
-        private final Connection owner;
-        /** Original Android request. Its clientData is reserved for wrapper lookup. */
-        private final UsbRequest nativeRequest;
-        /** Opaque connection-local lookup token, unrelated to device UUID/address. */
-        public final long id;
-        /** Retained only until dequeue/close; the completion packet then owns it. */
-        private ByteBuffer buffer;
-        /** Buffer lease, not a software queue or an interface-claim state. */
-        private boolean pending;
-        /** Permanent invalidation after this wrapper's native close attempt. */
-        private boolean closed;
-
-        /** Takes ownership after native initialization succeeds; caller holds the session lock. */
-        private Request(Connection owner, UsbRequest nativeRequest, long id) {
-            this.owner = owner;
-            this.nativeRequest = nativeRequest;
-            this.id = id;
-        }
-
-        /** Reads the original framework endpoint; Android clears it on native request close. */
-        public UsbEndpoint endpoint() {
-            synchronized (owner.owner) { return nativeRequest.getEndpoint(); }
-        }
-
-        /** Short native admission call. Buffer ownership ends only at dequeue or close. */
-        public boolean queue(ByteBuffer next) {
-            synchronized (owner.owner) {
-                owner.owner.checkDevice(owner.device);
-                synchronized (owner.readLock) {
-                    owner.checkOpen();
-                    if (closed) throw new IllegalStateException("USB request is closed");
-                    // A completed native request is not reusable until its buffer has been
-                    // collected here. Do not overwrite a result awaiting worker delivery.
-                    if (pending) throw new IllegalStateException("USB request is still pending completion");
-                    boolean accepted = nativeRequest.queue(next);
-                    if (accepted) { buffer = next; pending = true; }
-                    return accepted;
-                }
-            }
-        }
-
-        /** Cancellation acceptance is not completion; keep the buffer for requestWait. */
-        public boolean cancel() {
-            synchronized (owner.owner) {
-                synchronized (owner.readLock) {
-                    if (closed || owner.closing) return false;
-                    return nativeRequest.cancel();
-                }
-            }
-        }
-
-        /** Captures the completed buffer before a later submission can replace it. */
-        private RequestResult completed() {
-            synchronized (owner.owner) {
-                if (closed) throw new IllegalStateException("USB request closed while waiting");
-                RequestResult result = new RequestResult(this, buffer, buffer == null ? 0 : buffer.position());
-                buffer = null;
-                pending = false;
-                return result;
-            }
-        }
-
-        /** Native close is idempotent; never fabricates a cancellation completion. */
-        public void close() {
-            synchronized (owner.owner) {
-                synchronized (owner.readLock) {
-                    if (closed) return;
-                    try { nativeRequest.close(); }
-                    finally {
-                        closed = true;
-                        buffer = null;
-                        owner.requests.remove(this);
-                    }
-                }
-            }
-        }
-    }
-
-    /** Immutable completion ownership; retains the exact buffer, even after requeue. */
-    public static final class RequestResult {
-        /** Original request owner, used to recover the caller's Dart object. */
-        public final Request request;
-        /** Completed Java buffer, or null when the caller queued a null buffer. */
-        public final ByteBuffer buffer;
-        /** Position advanced by native dequeue, replacing ByteBuffer position in the Dart API. */
-        public final int length;
-
-        /** Freezes completion metadata without copying or reusing the underlying buffer. */
-        private RequestResult(Request request, ByteBuffer buffer, int length) {
-            this.request = request;
-            this.buffer = buffer;
-            this.length = length;
         }
     }
 }

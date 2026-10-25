@@ -178,6 +178,16 @@ public class UsbHostProxyTest {
         assertEquals(id, internalId(device));
     }
 
+    @Test public void secondListenerIsRejectedWithoutReplacingTheOriginal() {
+        UsbHostProxy.Events first = mock(UsbHostProxy.Events.class);
+        UsbHostProxy.Events second = mock(UsbHostProxy.Events.class);
+        session.listen(first);
+        assertThrows(IllegalStateException.class, () -> session.listen(second));
+        broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED, usb);
+        verify(first).attached(device);
+        verifyNoInteractions(second);
+    }
+
     @Test public void observedAbsenceAndDuplicateEventsRetireOnlyOnce() throws Exception {
         UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
         session.listen(events);
@@ -484,6 +494,88 @@ public class UsbHostProxyTest {
         session.open(device, missing);
         assertNull(missing.await().error);
         assertNull(missing.value);
+    }
+
+    @Test public void deviceSerialPreservesValuesErrorsAndRejectsRetiredAttachments() throws Exception {
+        SecurityException denial = new SecurityException("serial denied");
+        when(usb.getSerialNumber()).thenReturn("device serial").thenReturn(null).thenThrow(denial);
+        Result serial = new Result();
+        device.serial(serial);
+        assertEquals("device serial", serial.await().value);
+        assertNull(serial.error);
+        Result absent = new Result();
+        device.serial(absent);
+        assertNull(absent.await().value);
+        assertNull(absent.error);
+        Result failed = new Result();
+        device.serial(failed);
+        assertSame(denial, failed.await().error);
+        detachDevice();
+        Result retired = new Result();
+        device.serial(retired);
+        assertTrue(retired.await().error instanceof IllegalStateException);
+        verify(usb, times(3)).getSerialNumber();
+    }
+
+    @Test public void connectionSerialPreservesNativeValuesAndFailures() throws Exception {
+        SecurityException denial = new SecurityException("connection serial denied");
+        when(nativeConnection.getSerial()).thenReturn("connection serial").thenReturn(null).thenThrow(denial);
+        UsbHostProxy.Connection connection = open();
+        Result serial = new Result();
+        connection.serial(serial);
+        assertEquals("connection serial", serial.await().value);
+        assertNull(serial.error);
+        Result absent = new Result();
+        connection.serial(absent);
+        assertNull(absent.await().value);
+        assertNull(absent.error);
+        Result failed = new Result();
+        connection.serial(failed);
+        assertSame(denial, failed.await().error);
+    }
+
+    @Test public void directConnectionInformationPreservesNativeResultsAndRejectsClosedReads() throws Exception {
+        byte[] descriptors = new byte[] {0, (byte) 128, (byte) 255};
+        IllegalStateException failure = new IllegalStateException("native read failed");
+        when(nativeConnection.getFileDescriptor()).thenReturn(23, -1).thenThrow(failure);
+        when(nativeConnection.getRawDescriptors()).thenReturn(descriptors).thenReturn(null).thenThrow(failure);
+        UsbHostProxy.Connection connection = open();
+        assertEquals(23, connection.fileDescriptor());
+        assertEquals(-1, connection.fileDescriptor());
+        assertSame(failure, assertThrows(IllegalStateException.class, connection::fileDescriptor));
+        assertSame(descriptors, connection.rawDescriptors());
+        assertNull(connection.rawDescriptors());
+        assertSame(failure, assertThrows(IllegalStateException.class, connection::rawDescriptors));
+        Result closed = new Result();
+        connection.close(closed);
+        assertNull(closed.await().error);
+        assertThrows(IllegalStateException.class, connection::fileDescriptor);
+        assertThrows(IllegalStateException.class, connection::rawDescriptors);
+        verify(nativeConnection, times(3)).getFileDescriptor();
+        verify(nativeConnection, times(3)).getRawDescriptors();
+    }
+
+    @Test public void authorizedAndRetiredPermissionRequestsDoNotShowADialog() throws Exception {
+        when(manager.hasPermission(usb)).thenReturn(true);
+        Result authorized = new Result();
+        session.requestPermission(device, authorized);
+        assertEquals(true, authorized.await().value);
+        assertNull(authorized.error);
+        detachDevice();
+        Result retired = new Result();
+        session.requestPermission(device, retired);
+        assertEquals(false, retired.await().value);
+        assertNull(retired.error);
+        verify(manager, never()).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
+    }
+
+    @Test public void permissionSubmissionFailureRemainsAnErrorInsteadOfDenial() throws Exception {
+        SecurityException denial = new SecurityException("permission submission failed");
+        doThrow(denial).when(manager).requestPermission(eq(usb), any(PendingIntent.class));
+        Result permission = new Result();
+        session.requestPermission(device, permission);
+        assertSame(denial, permission.await().error);
+        assertEquals(1, permission.completions);
     }
 
     @Test public void interfacesAndConfigurationUseOriginalObjectsAndRejectOtherDevices() throws Exception {

@@ -11,7 +11,6 @@ import '../usb_endpoint.dart';
 import '../usb_interface.dart';
 import '../usb_request.dart';
 import 'bindings.g.dart' as j;
-import 'transfer_buffer.dart';
 
 // JNI references, not cached USB descriptor fields, are owned by these adapters.
 // Temporary references are released eagerly. Escaping references use JNI's native
@@ -103,13 +102,6 @@ String? _resultString(JObject? value) =>
 
 /// Internal Android backend, shared by managers in the engine's root isolate.
 final class AndroidUsb {
-  /// Weak keys preserve the existing generative UsbRequest constructor/subclasses.
-  /// An initialized connection retains requests until explicit or connection close.
-  static final _requests = Expando<UsbRequest>();
-
-  static UsbRequest request(UsbRequest original) =>
-      _requests[original] ??= _AndroidRequest(original);
-
   /// Lazily binds the root isolate to the session already registered by Java.
   static final AndroidUsb instance = AndroidUsb._();
 
@@ -383,27 +375,8 @@ final class _AndroidConnection implements UsbDeviceConnection {
   /// Java connection owner; not a raw file descriptor or descriptor snapshot.
   final j.UsbHostProxy$Connection native;
 
-  /// Restores the exact public request (and its opaque Dart client data) on wait.
-  final Map<int, _AndroidRequest> _requests = {};
-
   /// Retains the reference produced by casting a Java completion result.
-  _AndroidConnection(this.native) {
-    // No close is requested here. The same Completion mechanism reports native
-    // close/detach or session disposal even if the caller never calls close().
-    unawaited(
-      _call(native.whenClosed, (_) {}).then<void>(
-        (_) => _forgetRequests(),
-        onError: (Object error, StackTrace stack) => _forgetRequests(),
-      ),
-    );
-  }
-
-  void _forgetRequests() {
-    for (final request in _requests.values.toList()) {
-      request._forget();
-    }
-    _requests.clear();
-  }
+  _AndroidConnection(this.native);
 
   /// Unwraps an Android interface; Java verifies it belongs to this attachment.
   j.UsbInterface _interface(UsbInterface intf) {
@@ -467,45 +440,9 @@ final class _AndroidConnection implements UsbDeviceConnection {
         native.selectConfiguration(configuration.native, callback);
       }, _boolean);
   @override
-  Future<void> close() async {
-    try {
-      await _call(native.close, (_) {});
-    } finally {
-      _forgetRequests();
-    }
-  }
+  Future<void> close() => _call(native.close, (_) {});
 
-  /// Owns a separate Java array across the callback; workers never pin Dart data.
-  Future<int> _transfer(
-    Uint8List? buffer,
-    int offset,
-    int? length,
-    bool input,
-    void Function(JByteArray?, int, j.UsbHostProxy$Completion) start,
-  ) async {
-    final count = transferLength(buffer, offset, length);
-    if (input) checkInputBuffer(buffer, offset, count);
-    final bytes = buffer == null ? null : JByteArray(count);
-    try {
-      if (!input && count != 0) bytes!.setRange(0, count, buffer!, offset);
-      final transferred = await _call(
-        (completion) => start(bytes, count, completion),
-        (value) => value!.as(JInteger.type).use((n) => n.intValue()),
-      );
-      if (input && transferred > 0) {
-        receiveBytes(
-          buffer,
-          offset,
-          bytes!.getRange(0, transferred),
-          transferred,
-        );
-      }
-      return transferred;
-    } finally {
-      bytes?.release();
-    }
-  }
-
+  // These existing API members are deliberately outside this implementation.
   @override
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
@@ -513,25 +450,7 @@ final class _AndroidConnection implements UsbDeviceConnection {
     int offset = 0,
     int? length,
     int timeout = 0,
-  }) async {
-    if (endpoint is! _AndroidEndpoint) {
-      throw ArgumentError.value(
-        endpoint,
-        'endpoint',
-        'Expected an Android USB endpoint',
-      );
-    }
-    jniInt(timeout, 'timeout');
-    return _transfer(
-      buffer,
-      offset,
-      length,
-      endpoint.getDirection() == 0x80,
-      (bytes, count, completion) =>
-          native.bulk(endpoint.native, bytes, 0, count, timeout, completion),
-    );
-  }
-
+  }) async => throw UnsupportedError('USB data transport is not implemented');
   @override
   Future<int> controlTransfer(
     int requestType,
@@ -542,50 +461,10 @@ final class _AndroidConnection implements UsbDeviceConnection {
     int offset = 0,
     int? length,
     int timeout = 0,
-  }) async {
-    jniInt(requestType, 'requestType');
-    jniInt(request, 'request');
-    jniInt(value, 'value');
-    jniInt(index, 'index');
-    jniInt(timeout, 'timeout');
-    return _transfer(
-      buffer,
-      offset,
-      length,
-      requestType & 0x80 != 0,
-      (bytes, count, completion) => native.control(
-        requestType,
-        request,
-        value,
-        index,
-        bytes,
-        0,
-        count,
-        timeout,
-        completion,
-      ),
-    );
-  }
-
+  }) async => throw UnsupportedError('USB data transport is not implemented');
   @override
-  Future<UsbRequest?> requestWait({int? timeout}) => _call(
-    (completion) =>
-        native.waitRequest(timeout != null, timeout ?? 0, completion),
-    (value) {
-      if (value == null) return null;
-      return value.as(j.UsbHostProxy$RequestResult.type).use((result) {
-        final id = result.request!.use((request) => request.id);
-        final request = _requests[id];
-        if (request == null) {
-          throw StateError('USB request closed while waiting');
-        }
-        request._complete(result);
-        return request.original;
-      });
-    },
-  );
-
-  // Windows-only extensions remain outside the Android implementation.
+  Future<UsbRequest?> requestWait({int? timeout}) async =>
+      throw UnsupportedError('USB request transport is not implemented');
   @override
   Future<bool> resetPipe(UsbInterface intf, UsbEndpoint endpoint) async =>
       throw UnsupportedError('WinUSB is not available on Android');
@@ -608,149 +487,4 @@ final class _AndroidConnection implements UsbDeviceConnection {
     UsbEndpoint endpoint,
     int policyType,
   ) async => throw UnsupportedError('WinUSB is not available on Android');
-}
-
-/// Owns only a request's JNI handles, buffer lease and opaque Dart client data.
-/// Android queues the USB work; this adapter does not schedule or poll it.
-final class _AndroidRequest implements UsbRequest {
-  /// Keeps the caller's existing generative UsbRequest object as completion identity.
-  _AndroidRequest(this.original);
-
-  /// Returned by requestWait; never replaced by a newly constructed Dart wrapper.
-  final UsbRequest original;
-
-  /// Owns the lookup entry while this request is initialized.
-  _AndroidConnection? _connection;
-
-  /// Escaping JNI reference; cleared on request/connection close or session end.
-  j.UsbHostProxy$Request? _native;
-
-  /// Caller-owned IN destination retained until completion; OUT needs no Dart lease.
-  Uint8List? _target;
-
-  /// Offset in the caller's Uint8List view, not in its underlying allocation.
-  int _offset = 0;
-
-  /// Prevents reuse before Dart receives the native completion and copies IN bytes.
-  bool _pending = false;
-
-  /// Direction of the accepted submission, used only for completion copy-back.
-  bool _input = false;
-
-  /// Last delivered byte count; accepted queue and successful initialize reset it.
-  int? _transferred;
-
-  /// Opaque Dart context, intentionally separate from Java's internal clientData.
-  Object? _clientData;
-
-  @override
-  int? get transferredLength => _transferred;
-  @override
-  Object? getClientData() => _clientData;
-  @override
-  void setClientData(Object? data) => _clientData = data;
-  @override
-  UsbEndpoint? getEndpoint() => _java(() {
-    final endpoint = _native?.endpoint();
-    return endpoint == null ? null : _AndroidEndpoint(endpoint);
-  });
-
-  @override
-  Future<bool> initialize(
-    UsbDeviceConnection connection,
-    UsbEndpoint endpoint,
-  ) async {
-    if (_native != null) {
-      throw StateError(
-        'Close the initialized USB request before reinitializing',
-      );
-    }
-    if (connection is! _AndroidConnection || endpoint is! _AndroidEndpoint) {
-      throw ArgumentError('Expected an Android connection and endpoint');
-    }
-    final native = _java(
-      () => connection.native.initializeRequest(endpoint.native),
-    );
-    if (native == null) return false;
-    _native = native;
-    _connection = connection;
-    connection._requests[native.id] = this;
-    _transferred = null;
-    return true;
-  }
-
-  @override
-  Future<bool> queue(Uint8List? buffer, {int offset = 0, int? length}) async {
-    final native = _native;
-    if (native == null) throw StateError('USB request is not initialized');
-    if (_pending) throw StateError('USB request is still pending completion');
-    final count = transferLength(buffer, offset, length);
-    final endpoint = getEndpoint();
-    if (endpoint == null) throw StateError('USB request is closed');
-    final input = endpoint.getDirection() == 0x80;
-    if (input) checkInputBuffer(buffer, offset, count);
-    final bytes = buffer == null ? null : JByteBuffer.allocateDirect(count);
-    try {
-      if (!input && count != 0) {
-        bytes!.asUint8List().setRange(0, count, buffer!, offset);
-      }
-      final accepted = _java(() => native.queue(bytes));
-      if (accepted) {
-        // The native request now retains the Java buffer; no Dart pointer escapes.
-        _target = input ? buffer : null;
-        _offset = offset;
-        _input = input;
-        _pending = true;
-        _transferred = null;
-      }
-      return accepted;
-    } finally {
-      bytes?.release();
-    }
-  }
-
-  /// Consumes the completion's borrowed Java buffer before releasing its JNI view.
-  void _complete(j.UsbHostProxy$RequestResult result) {
-    final count = result.length;
-    try {
-      final bytes = result.buffer;
-      try {
-        if (_input && count > 0) {
-          receiveBytes(_target, _offset, bytes!.asUint8List(), count);
-        }
-      } finally {
-        bytes?.release();
-      }
-      _transferred = count;
-    } finally {
-      _target = null;
-      _pending = false;
-    }
-  }
-
-  @override
-  Future<bool> cancel() async =>
-      _native == null ? false : _java(_native!.cancel);
-
-  /// Drops ownership, not the caller's client data or last delivered byte count.
-  /// Java handles native teardown; repeating this Dart cleanup is harmless.
-  void _forget() {
-    _native?.release();
-    _native = null;
-    _connection = null;
-    _target = null;
-    _pending = false;
-  }
-
-  @override
-  Future<void> close() async {
-    final native = _native;
-    if (native == null) return;
-    try {
-      _java(native.close);
-    } finally {
-      _connection?._requests.remove(native.id);
-      _forget();
-    }
-  }
 }

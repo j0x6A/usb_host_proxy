@@ -2,8 +2,12 @@
 
 Manual USB Host diagnostics for a physical Android device (API >=28, Android 9) with USB
 Host/OTG support. Start it from the launcher or Android's USB app chooser.
-Application ID: `dev.jx6A78.usb_host_proxy`. This screen submits no data transfers
-(the plugin now implements Android transport). There is no Windows implementation.
+Application ID: `dev.jx6A78.usb_host_proxy`. There are no data transfers and
+no Windows implementation.
+
+`minSdk` is explicitly 28; `compileSdk` and `targetSdk` follow the installed
+Flutter SDK through the app's Gradle configuration. This example does not impose
+its target API on applications consuming the plugin.
 
 ## USB launch and defaults
 
@@ -180,18 +184,17 @@ They also check independent panel offsets after offscreen destruction/recreation
 lazy console rows with complete history and scrolling after multiline log bursts.
 Color tests include exception text resembling a USB/success message to ensure
 text content never determines the category.
-`test/transfer_buffer_test.dart` separately checks the library's pure Dart transport
-slice/copy-back helpers, early rejection of non-empty read-only IN destinations,
-read-only OUT/empty IN behavior and unchanged non-Android request placeholders; it does
-not submit transfers through this screen. Java `UsbTransportTest` covers the
-mocked native transport boundary on API 28, 31, 33 and 35.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor validation, ordering and lifecycle independently of the UI.
-The native close/active-I/O lifetime issue is deferred, not resolved. Neither
-suite establishes its safety, and this example does not exercise USB transport.
-See the [deferred issue in the plugin README](../README.md#deferred-issue-native-closeio-lifetime)
-before planning transport teardown tests on hardware.
+They also check device/connection serial values and errors, native FD/raw
+descriptor results, rejection after close and permission submission failures.
+This does not cover JNI conversion or native USB behavior. Static name/ID
+conversion, setting configuration/alternate settings and device serial reads
+are library features without dedicated controls in this diagnostic screen.
+`test/usb_request_test.dart` separately checks the withdrawn transport's public
+UsbRequest placeholders: null/false/no-op results, no native calls and no buffer
+reads or writes. No implemented transport, buffer helper or transfer test remains.
 
 With dependencies and Android tooling already available, run from `example/`:
 
