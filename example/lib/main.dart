@@ -35,7 +35,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   /// Latest accepted enumeration, keyed by the unchanged public Android name.
   Map<String, UsbDevice> _devices = {};
 
-  /// Selected list key, not the plugin's private attachment UUID.
+  /// Selected Android device-list key.
   String? _selectedName;
 
   /// Retained original selection; not replaced by a new adapter on each scan.
@@ -85,7 +85,7 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
   final ScrollController _rawScroll = ScrollController();
   final ScrollController _descriptorScroll = ScrollController();
 
-  // Versions arbitrate results, not device identity (the private UUID stays native).
+  // Versions arbitrate UI results; Android names identify device-list entries.
   int _selectionVersion = 0;
   int _scanVersion = 0;
   int _permissionVersion = 0;
@@ -204,8 +204,8 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
         _log('Selected device is no longer present', _LogLevel.info);
         _select(null);
       }
-      // Keep the attachment wrapper across continuous enumeration, even when
-      // Android returns a new Dart adapter for the same underlying attachment.
+      // Keep the selected descriptor view while its name stays present. New
+      // enumeration entries do not mutate previously obtained framework objects.
       if (_device != null && _idle) {
         unawaited(_checkPermission(_device!, _selectionVersion));
       }

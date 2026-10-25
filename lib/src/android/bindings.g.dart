@@ -1532,7 +1532,7 @@ final class $IllegalArgumentException$Type$
 /// Android backend exposed to Dart through JNIgen, without USB data transport.
 ///
 ///Framework USB objects remain the source of descriptor data. This class adds
-///attachment identity, engine ownership, permission callbacks and native lifetime protection.
+///engine ownership, permission callbacks, name-based events and native lifetime protection.
 ///The class monitor guards the engine registry; each Session guards its own state.
 extension type UsbHostProxy._(jni$_.JObject _$this) implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
@@ -1625,7 +1625,7 @@ final class $UsbHostProxy$Type$ extends jni$_.JType<UsbHostProxy> {
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Connection`
 ///
-/// Owns one framework connection, bound permanently to one attachment wrapper.
+/// Owns one framework connection; the Android name is used only for detach cleanup.
 ///Connection lifecycle is validated here; Android/kernel decide
 ///interface claim and setting policy. No claim or alternate-setting history is kept.
 ///
@@ -2050,8 +2050,8 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
   /// from: `synchronized public dev.jx6A78.usb_host_proxy.UsbHostProxy$Device[] deviceList()`
   /// The returned object must be released after use, by calling the [release] method.
   ///
-  /// Reconciles the live framework list and returns canonical attachment wrappers.
-  ///Missing names are retired and may emit detach; presence alone emits no attach.
+  /// Reconciles the live framework list and returns its original descriptor references.
+  ///Missing known names trigger cleanup/detach; presence alone emits no attach.
   ///This direct JNI entry point enumerates synchronously on the calling thread.
   jni$_.JArray<UsbHostProxy$Device?>? deviceList() {
     final _$$selfRef = reference;
@@ -2086,7 +2086,7 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
 
   /// from: `synchronized public boolean hasPermission(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device)`
   ///
-  /// Checks Android synchronously; a retired attachment returns false, a foreign one fails.
+  /// Returns Android's synchronous permission result for the supplied device view.
   core$_.bool hasPermission(UsbHostProxy$Device? device) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;
@@ -2126,8 +2126,8 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
 
   /// from: `synchronized public void requestPermission(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Shares one pending Android permission decision per attachment, without a timeout.
-  ///Refusal or retirement completes false; session disposal completes with an error.
+  /// Shares one pending Android permission decision per name, without a timeout.
+  ///Refusal or observed detach completes false; session disposal completes with an error.
   ///Only submission to Android is dispatched to a worker; no worker waits for the reply.
   void requestPermission(
     UsbHostProxy$Device? device,
@@ -2170,11 +2170,11 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
             )
           >();
 
-  /// from: `public void open(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `synchronized public void open(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
   /// Opens on a session worker without implicitly requesting permission.
-  ///Native null is preserved. A connection opened across retirement/disposal is
-  ///closed here instead of being published to Dart under an obsolete identity.
+  ///Native null is preserved. Detach/session end invalidates the pending open call;
+  ///a native connection arriving afterwards is closed instead of being published.
   void open(UsbHostProxy$Device? device, UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;
@@ -2200,7 +2200,7 @@ final class $UsbHostProxy$Session$Type$
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Device`
 ///
-/// One observed attachment. A reused Android name alone cannot prove reattachment.
+/// A framework device view owned by one engine; not a lease on a USB attachment.
 extension type UsbHostProxy$Device._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
@@ -2221,7 +2221,7 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
   /// from: `public final android.hardware.usb.UsbDevice usbDevice`
   /// The returned object must be released after use, by calling the [release] method.
   ///
-  /// Original descriptor object; retained even after this attachment is retired.
+  /// Original immutable framework descriptor reference.
   UsbDevice? get usbDevice =>
       _id_usbDevice.getNullable(this, UsbDevice.type) as UsbDevice?;
 
@@ -2250,7 +2250,7 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
 
   /// from: `public void serial(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Reads the framework serial on a worker after checking attachment ownership.
+  /// Reads the supplied framework object's serial after checking its owning session.
   void serial(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -2431,7 +2431,7 @@ extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
 
   /// from: `public abstract void detached(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device)`
   ///
-  /// Reports a retired attachment after invalidation and scheduling close.
+  /// Reports a removed name after cancelling pending access and scheduling close.
   void detached(UsbHostProxy$Device? device) {
     final _$$selfRef = reference;
     final _$device = device?.reference ?? jni$_.jNullReference;

@@ -1,5 +1,11 @@
 ## 0.2.0 (unreleased)
 
+- Use Android device names without private device UUIDs, generation checks or
+  deviceInstance permission extras. Keep session-isolated callback routes and
+  request codes; accept older same-session device views and preserve native results.
+- Honor detach by name even when that name is already present again. Invalidate
+  pending open attempts separately, close late native results and clean resources
+  created before rediscovery during enumeration and engine shutdown.
 - Document native admission, pending Future completion and close waiting;
   extend lifetime tests to direct file-descriptor and raw-descriptor reads.
 - Remove per-connection FIFO executors; dispatch management operations and close
@@ -7,7 +13,7 @@
   immediately and uses exclusive lifetime protection after admitted calls return;
   management calls can run concurrently, with no FIFO or callback-order guarantee.
 - Delegate Android device equality and hashing to native UsbDevice methods,
-  independently of private attachment UUIDs. Remove interface/configuration
+  independently of wrapper identity. Remove interface/configuration
   reference-identity validation while retaining session and connection lifecycle
   checks; forward descriptors and preserve Android results and exceptions.
 - Clarify management implementation versus test coverage, application-owned
@@ -28,12 +34,9 @@
   using JNI/JNIgen, without data transport.
 - Run blocking connection operations on shared session workers;
   close connections on detach and engine shutdown/restart.
-- Identify observed attachments privately by `deviceName-UUID`, retaining the
-  UUID across enumerations without changing Android names or public list keys.
-- Deduplicate attach/detach notifications, bind permission replies to attachment
-  instances and report detach when enumeration detects absence. Unobserved
-  same-name unplug/replug cycles cannot be distinguished.
-- Add Android lifecycle/concurrency, attachment identity and permission tests
+- Deduplicate notifications by name and report detach when enumeration detects
+  absence. Do not infer physical attachment identities beyond Android's events.
+- Add Android lifecycle/concurrency, name-based device and permission tests
   across API 28, 31, 33 and 35, including plugin engine callbacks.
 - Use Java for the Android plugin and example activity; keep Gradle Kotlin DSL.
 - Provide a launcher/USB-started diagnostic example with its own namespace

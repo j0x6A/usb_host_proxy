@@ -123,8 +123,10 @@ observing its detach/absence, or disposing the screen clears its UI ownership
 and attempts native close. Late open results are closed, never adopted by a new
 selection. Selection, discovery and permission-check versions discard obsolete
 results; original public device/interface references are passed to the plugin.
-Names are list keys, not UUID replacements. An unobservable unplug/replug cycle
-under a reused name remains subject to the plugin's documented limitation.
+Names are Android list keys. The plugin adds no device UUID or generation check;
+it follows Android detach events and closes connections by name. The screen
+retains its selected descriptor view until selection changes; it does not mutate
+previously obtained descriptors merely because a later scan returns a new view.
 
 One user operation runs at a time; cleanup also blocks new USB operations until
 it finishes. Discovery and device selection remain available. A pending permission
@@ -153,7 +155,7 @@ passed to Claim/Release, not the active configuration or alternate setting.
   invalidates the previous selection, and `_checkPermission` owns check revisions.
 - `_run` gates user actions. `_closeOwned` remains responsible for native cleanup
   even if the selected device or screen no longer exists. `_current` is a UI
-  result-acceptance rule, not a replacement for the plugin's attachment UUID.
+  result-acceptance rule, not an additional USB device identity.
 - `_deviceLabel`, `_descriptorDetails` and `_interfaceControls` render public API
   data and local operation results; they do not open devices while building.
 - `_statusLine` reserves stable status/error geometry. The raw/descriptor panels
@@ -189,6 +191,9 @@ text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor forwarding, parallel execution and lifecycle independently of the UI.
+They cover saved device views after detach, name-based permission coalescing,
+session-isolated replies and cleanup of opens invalidated by detach/restart,
+including connections opened before rediscovery. No device UUID is involved.
 They also check device/connection serial values and errors, native FD/raw
 descriptor results, rejection after close and permission submission failures.
 Blocked direct FD/raw reads verify that native close waits for their return

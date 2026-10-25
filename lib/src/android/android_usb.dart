@@ -111,7 +111,7 @@ final class AndroidUsb {
   /// Live attachment notifications, dropped when no Dart listener is present.
   final _attached = StreamController<UsbDevice>.broadcast();
 
-  /// Retired attachment notifications; descriptor references remain readable.
+  /// Observed name-removal notifications; descriptor references remain readable.
   final _detached = StreamController<UsbDevice>.broadcast();
 
   /// Installs one asynchronous JNIgen event listener; does not enumerate devices.
@@ -173,7 +173,7 @@ final class AndroidUsb {
   /// Broadcast attach stream; previously observed devices are not replayed.
   Stream<UsbDevice> get deviceAttached => _attached.stream;
 
-  /// Broadcast detach stream for invalidated attachment wrappers.
+  /// Broadcast detach stream after name-based connection/permission cleanup.
   Stream<UsbDevice> get deviceDetached => _detached.stream;
 
   /// Enumerates synchronously via JNI, retaining device handles but not the array.
@@ -216,7 +216,7 @@ final class AndroidUsb {
   bool hasPermission(UsbDevice device) =>
       _java(() => _session.hasPermission(_device(device).handle));
 
-  /// Awaits the coalesced native decision for this attachment, without a timeout.
+  /// Awaits the coalesced native decision for this Android name, without a timeout.
   Future<bool> requestPermission(UsbDevice device) => _call(
     (callback) => _session.requestPermission(_device(device).handle, callback),
     _boolean,
@@ -250,7 +250,7 @@ final class AndroidUsb {
 /// Getter contracts are documented by [UsbDevice]. No descriptor fields are
 /// cached in Dart; both escaping JNI references use native finalizers.
 final class _AndroidDevice implements UsbDevice {
-  /// Canonical Java attachment wrapper, including its private UUID and owner.
+  /// Java device view and owning engine session, without an attachment token.
   final j.UsbHostProxy$Device handle;
 
   /// Original Android descriptor object, not a copy of its fields.
@@ -259,7 +259,7 @@ final class _AndroidDevice implements UsbDevice {
   /// Takes the escaping wrapper reference and obtains its descriptor reference.
   _AndroidDevice(this.handle) : native = _java(() => handle.usbDevice)!;
 
-  /// Uses Android's name-based equality, independently of attachment UUIDs.
+  /// Uses Android's name-based equality, independently of wrapper identity.
   @override
   bool operator ==(Object other) =>
       other is _AndroidDevice && _java(() => native.equals(other.native));

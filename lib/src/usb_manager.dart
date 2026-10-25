@@ -42,10 +42,10 @@ class UsbManager {
       ? AndroidUsb.instance.deviceAttached
       : const Stream<UsbDevice>.empty();
 
-  /// Stream of retired device references, not copies of their descriptor fields.
+  /// Stream of device views for names removed from the observed device list.
   ///
-  /// Connections are invalidated before notification. The native descriptor
-  /// objects remain readable; device operations require a current attachment.
+  /// Connections for that name are invalidated before notification. Descriptor
+  /// objects remain readable and are not locally blacklisted as future inputs.
   Stream<UsbDevice> get deviceDetached => Platform.isAndroid
       ? AndroidUsb.instance.deviceDetached
       : const Stream<UsbDevice>.empty();
@@ -54,10 +54,9 @@ class UsbManager {
   ///
   /// Does not open devices or request permission. Enumeration can report detach
   /// for a previously known device that is now absent, but does not emit attach
-  /// for every listed device. Repeated enumeration retains native attachment
-  /// identity, although Dart adapter objects need not be identical.
-  /// Android adapter equality/hash follow the device name, not attachment UUIDs;
-  /// equality alone is not proof that an attachment is still current.
+  /// for every listed device. Returns current framework views without copying
+  /// descriptor fields; previous views are not mutated. Android adapter equality
+  /// and hashing follow the device name, independently of wrapper identity.
   ///
   /// On Android the enumeration itself is synchronous JNI work. Other platforms
   /// currently return an empty map.
@@ -68,8 +67,8 @@ class UsbManager {
 
   /// Whether the application currently has permission to access [device].
   ///
-  /// Android returns false for a retired attachment and rejects objects from
-  /// another engine or a foreign implementation. The framework check runs
+  /// Android's result is returned even for an older descriptor view. Objects
+  /// from another engine or implementation are rejected. The framework check runs
   /// synchronously despite this method returning a Future. Other platforms
   /// currently return false.
   Future<bool> hasPermission(UsbDevice device) async {
@@ -79,10 +78,10 @@ class UsbManager {
 
   /// Requests access and waits for the permission decision.
   ///
-  /// Concurrent requests for the same attachment share a decision. Denial or
+  /// Concurrent requests for the same Android name share a decision. Denial or
   /// detachment returns false. Session termination completes with an error.
   /// No timeout is imposed and an already-authorized attachment completes true.
-  /// Foreign device ownership fails rather than targeting another connection.
+  /// Another engine's device or a foreign implementation fails before native access.
   /// Other platforms currently return false without requesting anything.
   Future<bool> requestPermission(UsbDevice device) async {
     if (Platform.isAndroid) {
@@ -94,9 +93,11 @@ class UsbManager {
   /// Opens [device], or returns null if it cannot be opened.
   ///
   /// Does not request permission implicitly. Android exceptions are propagated.
-  /// A retired Android attachment fails with [StateError]; a device from another
-  /// engine or implementation fails with [ArgumentError]. A connection opened
-  /// across retirement is closed before publication. Other platforms return null.
+  /// Older views from this session are forwarded to Android without an attachment
+  /// generation check. Another engine/implementation fails with [ArgumentError].
+  /// An open attempt invalidated by observed detach closes any late native result
+  /// and fails with [StateError]. Session termination also fails pending opens.
+  /// A closed connection is never reused. Other platforms return null.
   Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
     if (Platform.isAndroid) return AndroidUsb.instance.openDevice(device);
     return null;

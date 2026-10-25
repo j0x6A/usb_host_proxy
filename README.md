@@ -55,12 +55,12 @@ the original framework object directly.
 | `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Public contracts, descriptor meanings, constants and unsupported placeholders. |
 | `lib/src/android/android_usb.dart` | JNI reference ownership, Java-to-Dart errors, completion-to-Future conversion and event streams. |
 | `lib/src/android/bindings.g.dart`, `tool/jnigen.dart` | Generated JNI signatures and the explicit regeneration entry point; no hand-written backend policy. |
-| `android/src/main/java/.../UsbHostProxy.java` | Attachment identities, permissions, live-device registry, shared workers and native connection lifetime. |
+| `android/src/main/java/.../UsbHostProxy.java` | Device-name bookkeeping, permissions, shared workers and native connection lifetime. |
 | `android/src/main/java/.../UsbHostProxyPlugin.java` | Engine/Activity lifecycle and forwarding Activity intents; not USB descriptor or transport logic. |
 | `android/src/test/java`, `example/` | Mock-backed backend/lifecycle tests and a manual USB Host diagnostic app with fake-backed widget tests. |
 
-Within `UsbHostProxy`, `Session` is the engine owner, `Device` represents one
-observed attachment and `Connection` owns one open native connection. `Permission`
+Within `UsbHostProxy`, `Session` is the engine owner, `Device` retains a framework
+descriptor view and `Connection` owns one open native connection. `Permission`
 coalesces callers awaiting a decision; `Call` ensures a callback is settled at
 most once, even if session cleanup wins a race with a worker.
 
@@ -91,7 +91,7 @@ through JNI; a Future in the public signature does not move those calls to a wor
 submission, connection management and close. Completion callbacks are also
 shared by management operations and remain in use.
 
-`requestPermission` shares a pending decision for the same attachment. Refusal
+`requestPermission` shares a pending decision for the same Android name. Refusal
 or detach returns false; session termination fails pending calls. No timeout is
 imposed. Video-class devices may additionally require the application's CAMERA
 permission. `openDevice` never requests permission implicitly.
@@ -140,20 +140,39 @@ Connection/session lifecycle and device-session ownership checks remain in place
 
 Android device adapters delegate `==` and `hashCode` to the framework's
 `UsbDevice.equals()` and `hashCode()`. Two Android device adapters with the same
-`deviceName` compare equal, even when they belong to different sessions or
-attachment UUIDs. Equality is not a liveness check and does not authorize use of
-an old attachment. Comparisons to strings or custom Dart device implementations
+`deviceName` compare equal, including after name reuse or across sessions.
+Equality is not a liveness or permission check. Comparisons to strings or custom
+Dart device implementations
 return false; the native Java `equals(String)` convenience is not exposed as
 Dart equality because it would break symmetry with `String.==`.
 
-Each observed attachment has a private `deviceName-UUID` identity within the
-engine session. Enumerations retain it; observed absence retires it and a later
-presence receives a new UUID. Android device names and `getDeviceList()` keys
-remain unchanged. Duplicate events do not create extra attachments; a detach
-notification cannot retire a currently present name. Enumeration also reports
-detach when it detects absence. A complete unplug/replug cycle under the same
-name cannot be distinguished if Android provides no correlatable information
-and no absence is observed; UUIDs do not remove that limitation.
+Device identity follows Android's `deviceName`, with no private UUID, generation
+counter or attachment lease. Older views from the same active session are valid
+inputs to permission/open/serial calls; Android decides their result. Descriptor
+fields still belong to the retained framework object and do not update by name.
+Enumeration supplies the latest framework views without mutating older ones.
+It does not infer a physical reconnection merely from a different Java object.
+
+Attach delivery is deduplicated by name until observed absence or Android detach.
+A detach is authoritative: connections for its name are closed even if a new
+device is already present under that name in the latest list. Repeated detach
+without intervening work is idempotent. Without an Android attachment token, a
+late old detach cannot be distinguished from a new detach for a reused name;
+the plugin follows Android's events instead of guessing. No unseen physical
+unplug/replug cycle is reconstructed from descriptor fingerprints.
+
+The UUID that remains in the permission reply action isolates callback routes
+between engine sessions; it is not a USB identifier. Request codes identify
+pending decisions, and detach cancels matching decisions by name. The removed
+`deviceInstance` extra is unnecessary for correlation. Open attempts likewise
+have operation lifetimes: detach invalidates the attempt, and any late native
+connection is closed before its result is reported. Session shutdown settles
+calls immediately and still cleans late native results. Name reuse never revives
+a closed connection or an invalidated operation.
+
+Enumeration reconciles names from event bookkeeping, connections, permissions
+and pending opens. Shutdown closes all owned connections, including ones opened
+using a saved device view before rediscovery. Neither path needs a device UUID.
 
 ## USB-triggered application launch
 
@@ -210,7 +229,7 @@ Activity delivery follows the engine/session ownership boundary:
 | --- | --- |
 | Initial `Activity.getIntent()` or Activity recreation | Reconcile silently; obtain initial devices through `getDeviceList()`. |
 | `onNewIntent()` or USB broadcast | Use the same registry and attach flag; notify at most once per observed attachment. |
-| Activity detach/configuration change | Remove the old listener; preserve the session, UUIDs and USB connections. |
+| Activity detach/configuration change | Remove the old listener; preserve the session, notification flags and USB connections. |
 | Engine restart | Replace the session, invalidate its old objects and pending work, retain the Activity registration. |
 | Engine/plugin shutdown | Remove the Activity listener and dispose the session, including its receivers and pending work. |
 
@@ -237,7 +256,7 @@ binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool
 
 Android unit test sources in `android/src/test/java` target API 28, 31, 33 and 35
 to cover the permission PendingIntent and receiver API branches. They use
-Robolectric and mocked USB objects; they cover attachment identity, duplicate
+Robolectric and mocked USB objects; they cover name-based device views, duplicate
 events, permission replies, device-session ownership, parallel management work
 and cleanup. Interface tests cover native true/false/error forwarding, repeated
 operations, original alternate descriptors, independent connections, concurrent
@@ -260,9 +279,9 @@ branch or device behavior has been tested. The Windows pipe extensions,
 
 | Area | Implementation and automated checks | Remaining verification |
 | --- | --- | --- |
-| Enumeration and attachment identity | Java tests retain original objects, names and UUIDs; reconcile absence and duplicate/stale notifications. | Dart list keys and JNI object lifetime on a device. |
+| Enumeration and names | Java tests preserve native views, refresh snapshots, reconcile absence and deduplicate notifications. | Dart list keys and JNI object lifetime on a device. |
 | Device/configuration/interface/endpoint fields | Dart adapters call original Android getters; the example uses fake descriptors in widget tests. | Real JNI getter results, indices, optional strings and static name/ID conversion. |
-| Permissions | Java tests cover coalescing, grant/refusal, stale/foreign objects, authorized requests, submission errors and session cleanup. | System permission UI, class-specific permission policy and OEM behavior. |
+| Permissions | Java tests cover name-based coalescing, grant/refusal, old/foreign views, late replies, session isolation, submission errors and cleanup. | System permission UI, class-specific permission policy and OEM behavior. |
 | Open/Close and connection information | Java tests cover null/errors, late opens, serial values/errors, raw bytes/null/errors, FD results, close ordering and invalidation. | JNI byte-array conversion, error translation and real resource teardown. |
 | Claim/Release and setting selection | Java tests verify native booleans/exceptions, force, original descriptors, parallel execution and independent connections. | Real kernel/device behavior, alternate settings and configuration changes; the example does not select settings. |
 | Events and engine/Activity lifecycle | Java tests cover initial/new intents, broadcasts, deduplication, restart, listener removal and headless sessions. | Actual Flutter restart, USB app chooser and cold/warm launch on hardware. |
@@ -295,8 +314,8 @@ callbacks, permission grant/refusal, detach during pending work, same-name
 reattachment, independent devices, engine restart and USB-triggered launch.
 These are verification scenarios, not claims of completed hardware testing.
 For equality/hashing, compare adapters from consecutive enumerations and use
-them as Set/Map keys. A retired adapter can still compare equal to a later
-attachment with the same name; management through the retired handle must fail.
+them as Set/Map keys. Older same-session views remain accepted inputs; Android
+decides access, while previously closed connections remain unusable.
 `example/test/usb_request_test.dart` checks placeholder return values, idempotent
 no-op close and lack of buffer/native access. The withdrawn transport's buffer
 helpers, request lifecycle tests and generated request/result bindings are removed.
