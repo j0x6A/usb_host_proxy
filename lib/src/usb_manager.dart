@@ -56,6 +56,8 @@ class UsbManager {
   /// for a previously known device that is now absent, but does not emit attach
   /// for every listed device. Repeated enumeration retains native attachment
   /// identity, although Dart adapter objects need not be identical.
+  /// Android adapter equality/hash follow the device name, not attachment UUIDs;
+  /// equality alone is not proof that an attachment is still current.
   ///
   /// On Android the enumeration itself is synchronous JNI work. Other platforms
   /// currently return an empty map.

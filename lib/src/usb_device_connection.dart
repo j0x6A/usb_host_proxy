@@ -13,9 +13,12 @@ import 'usb_request.dart';
 /// Implemented operations on a closed/detached Android connection fail with
 /// [StateError]. Unsupported members always fail with [UnsupportedError].
 ///
-/// Each Android connection has an independent ordered queue for management
-/// operations. Interface/configuration arguments must be original descriptors
-/// from the same attachment; matching numeric IDs alone do not establish ownership.
+/// Android management operations run on the session's shared worker pool without
+/// FIFO ordering, including operations on the same connection. Await results
+/// before submitting dependent operations. Interface/configuration arguments
+/// must be Android descriptor adapters. Their native references are forwarded
+/// without checking whether they occur in this device's descriptor tree;
+/// Android decides the result.
 abstract class UsbDeviceConnection {
   // Android USB host API.
 
@@ -30,8 +33,8 @@ abstract class UsbDeviceConnection {
 
   /// Returns the device serial string.
   ///
-  /// Android reads it on the connection's ordered queue. Native null is
-  /// preserved; permission or framework failures remain errors.
+  /// Android reads it on a session worker. Native null is preserved;
+  /// permission or framework failures remain errors.
   Future<String?> getSerial();
 
   /// Claims [intf] before transferring on its non-control endpoints.
@@ -96,16 +99,25 @@ abstract class UsbDeviceConnection {
 
   /// Closes the connection.
   ///
-  /// Android close is idempotent and waits for in-flight management operations.
+  /// Android close is idempotent and waits for admitted native calls, including
+  /// direct file-descriptor and raw-descriptor reads.
   /// Scheduling it immediately rejects new work on the entire connection.
   /// Calls native close once, without separate per-interface release calls;
   /// Android/kernel own resource teardown. Even if native close
   /// throws, this connection is permanently unusable; that error is reported
   /// to the callers awaiting that attempt. Later close calls remain safe.
   /// Detaching the device or ending the engine session also closes it.
-  /// Explicit close drains already-accepted work; detach or session end rejects
-  /// queued work before native access. A native call already running is not
-  /// forcibly interrupted. JNI finalization alone does not close the connection.
+  /// Close, detach and session end reject work not yet admitted to native access,
+  /// even if it has already been submitted to a worker. Close runs on a session
+  /// worker without FIFO; lifetime protection waits only for admitted native
+  /// calls to return. Those calls may run concurrently and are not forcibly
+  /// interrupted. Callbacks have no completion-order guarantee. JNI finalization
+  /// alone does not close the connection.
+  ///
+  /// Admission is the last lifecycle check while holding shared native access.
+  /// Invalidating pending work prevents native entry; it does not guarantee
+  /// immediate completion of its future. If an admitted native call does not
+  /// return, close cannot finish. No timeout or forced interruption is added.
   Future<void> close();
 
   // Windows USB pipe extensions. Every method in this group currently fails

@@ -259,6 +259,15 @@ final class _AndroidDevice implements UsbDevice {
   /// Takes the escaping wrapper reference and obtains its descriptor reference.
   _AndroidDevice(this.handle) : native = _java(() => handle.usbDevice)!;
 
+  /// Uses Android's name-based equality, independently of attachment UUIDs.
+  @override
+  bool operator ==(Object other) =>
+      other is _AndroidDevice && _java(() => native.equals(other.native));
+
+  /// Preserves the native hash rather than Dart object/reference identity.
+  @override
+  int get hashCode => _java(native.hashCode$1);
+
   @override
   UsbConfiguration getConfiguration(int index) =>
       _java(() => _AndroidConfiguration(native.getConfiguration(index)!));
@@ -320,7 +329,7 @@ final class _AndroidConfiguration implements UsbConfiguration {
 
 /// Thin descriptor view; method contracts are inherited from [UsbInterface].
 final class _AndroidInterface implements UsbInterface {
-  /// Original interface reference, also used for native ownership validation.
+  /// Original interface reference, passed directly to Android operations.
   final j.UsbInterface native;
 
   /// Retains the supplied reference without copying descriptor values.
@@ -367,7 +376,7 @@ final class _AndroidEndpoint implements UsbEndpoint {
   int getType() => _java(() => native.type$1);
 }
 
-/// Adapts connection calls and results; Java owns the queue and native close.
+/// Adapts connection calls and results; Java owns worker dispatch and native close.
 ///
 /// Supported method contracts are documented by [UsbDeviceConnection]. Releasing
 /// a JNI reference is not a substitute for explicitly awaiting [close].
@@ -378,7 +387,7 @@ final class _AndroidConnection implements UsbDeviceConnection {
   /// Retains the reference produced by casting a Java completion result.
   _AndroidConnection(this.native);
 
-  /// Unwraps an Android interface; Java verifies it belongs to this attachment.
+  /// Requires an Android descriptor adapter, then forwards its native reference.
   j.UsbInterface _interface(UsbInterface intf) {
     if (intf is! _AndroidInterface) {
       throw ArgumentError.value(

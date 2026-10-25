@@ -1532,7 +1532,7 @@ final class $IllegalArgumentException$Type$
 /// Android backend exposed to Dart through JNIgen, without USB data transport.
 ///
 ///Framework USB objects remain the source of descriptor data. This class adds
-///attachment identity, engine ownership, permission callbacks and operation queues.
+///attachment identity, engine ownership, permission callbacks and native lifetime protection.
 ///The class monitor guards the engine registry; each Session guards its own state.
 extension type UsbHostProxy._(jni$_.JObject _$this) implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
@@ -1626,12 +1626,14 @@ final class $UsbHostProxy$Type$ extends jni$_.JType<UsbHostProxy> {
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Connection`
 ///
 /// Owns one framework connection, bound permanently to one attachment wrapper.
-///Descriptor origin and lifecycle are validated here; Android/kernel decide
+///Connection lifecycle is validated here; Android/kernel decide
 ///interface claim and setting policy. No claim or alternate-setting history is kept.
 ///
-///Lifecycle changes acquire the session monitor before readLock. Synchronous
-///reads use readLock alone; native close also uses it. Accepted management work
-///and close are serialized on this connection's queue, never on a global queue.
+///Native calls share a lifetime read lock; close alone takes its write lock.
+///This allows concurrent operations while preventing close from freeing an object
+///still in native use. Close marks admission closed under the session monitor,
+///but never waits for native access while holding that monitor. Workers release
+///native access before delivering callbacks or finalizing close under the monitor.
 extension type UsbHostProxy$Connection._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
@@ -1730,7 +1732,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   /// from: `public void serial(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Reads the native connection's serial on its ordered operation queue.
+  /// Reads the native connection's serial on a session worker.
   void serial(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -1774,7 +1776,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   /// from: `public void claim(android.hardware.usb.UsbInterface intf, boolean force, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Validates the original descriptor and forwards claim/force, preserving Android's result.
+  /// Forwards claim/force without imposing descriptor-reference identity rules.
   void claim(
     UsbInterface? intf,
     core$_.bool force,
@@ -1907,7 +1909,7 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   /// from: `public void selectConfiguration(android.hardware.usb.UsbConfiguration configuration, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Validates the original configuration and forwards the native result without local policy.
+  /// Forwards the configuration without scanning this device's descriptor references.
   void selectConfiguration(
     UsbConfiguration? configuration,
     UsbHostProxy$Completion? completion,
@@ -1948,7 +1950,9 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
 
   /// from: `public void close(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Schedules one native close after accepted work; concurrent callers share its result.
+  /// Rejects pending/new work and dispatches one close to the session worker pool.
+  ///Native close waits only for admitted native calls, without FIFO ordering.
+  ///Concurrent callers share its result.
   ///A null completion is used by lifecycle cleanup. Already-closed calls succeed;
   ///a failure from the first native close attempt is not replayed to later callers.
   ///No interface releases are issued here. The connection stays unusable even
@@ -1977,7 +1981,7 @@ final class $UsbHostProxy$Connection$Type$
 ///
 ///The session monitor guards devices, permissions, calls, connections and event
 ///delivery. Normal worker operations run outside it; publication and late-open
-///cleanup reacquire it. Each connection's queue orders only that connection.
+///cleanup reacquire it. Connection operations share the worker pool without FIFO.
 extension type UsbHostProxy$Session._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(

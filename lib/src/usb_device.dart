@@ -10,6 +10,12 @@ import 'usb_interface.dart';
 /// remain readable after detach; operations requiring a live attachment, such
 /// as serial-number access, may fail. A name or platform ID is not a persistent
 /// hardware identity and can be reused after disconnection.
+///
+/// Android adapters delegate equality and hashing to the native UsbDevice:
+/// adapters with the same Android name compare equal and have the same native
+/// hash, even across different attachment UUIDs or sessions. This does not make
+/// a retired attachment usable. Equality is between Android device adapters,
+/// not between a device and its name string or a custom Dart implementation.
 abstract class UsbDevice {
   /// Returns a configuration by descriptor index.
   ///

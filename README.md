@@ -55,7 +55,7 @@ the original framework object directly.
 | `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Public contracts, descriptor meanings, constants and unsupported placeholders. |
 | `lib/src/android/android_usb.dart` | JNI reference ownership, Java-to-Dart errors, completion-to-Future conversion and event streams. |
 | `lib/src/android/bindings.g.dart`, `tool/jnigen.dart` | Generated JNI signatures and the explicit regeneration entry point; no hand-written backend policy. |
-| `android/src/main/java/.../UsbHostProxy.java` | Attachment identities, permissions, live-device registry, native connection ownership and ordered work. |
+| `android/src/main/java/.../UsbHostProxy.java` | Attachment identities, permissions, live-device registry, shared workers and native connection lifetime. |
 | `android/src/main/java/.../UsbHostProxyPlugin.java` | Engine/Activity lifecycle and forwarding Activity intents; not USB descriptor or transport logic. |
 | `android/src/test/java`, `example/` | Mock-backed backend/lifecycle tests and a manual USB Host diagnostic app with fake-backed widget tests. |
 
@@ -65,11 +65,13 @@ coalesces callers awaiting a decision; `Call` ensures a callback is settled at
 most once, even if session cleanup wins a race with a worker.
 
 When reading concurrency paths, distinguish the class lock (engine registry),
-session lock (lifecycle state and pending callbacks), per-connection queue
-(ordered native operations) and `readLock` (direct reads versus native close).
-Code needing both session and connection locks acquires the session first.
-Neither session disposal nor detach forcibly interrupts a native call already
-running; cleanup schedules close and rejects subsequent queued access.
+session lock (lifecycle state and pending callbacks) and each connection's
+read/write lifetime lock (parallel native operations versus exclusive native
+close). Close marks admission closed under the session lock, then a worker waits
+for exclusive native access without holding the session lock. Native access is
+released before completion callbacks or close bookkeeping acquire the session
+lock. Neither session disposal nor detach forcibly interrupts an admitted call;
+cleanup schedules close and invalidates operations not yet admitted.
 
 ## Lifecycle and errors
 
@@ -78,12 +80,15 @@ The existing single-root-isolate initialization and single Java event listener
 are retained. No background-isolate binding, listener fan-out or cross-isolate
 JNI-reference ownership is introduced.
 Descriptor getters call JNI directly. Opening, serial reads and potentially
-blocking management operations use Android workers; each connection has its own
-ordered queue. File descriptor/raw descriptor reads are guarded against close.
+blocking management operations use the session's existing worker pool. There
+are no per-connection queues or FIFO guarantees; callers must await operations
+whose order matters. File descriptor/raw descriptor reads remain direct JNI
+calls. All connection calls share lifetime protection against native close,
+without serializing management calls against one another.
 `getDeviceList()` and `hasPermission()` still make synchronous framework calls
 through JNI; a Future in the public signature does not move those calls to a worker.
 `Session.workers` remains necessary for open, device serial reads and permission
-submission; it is not a transport-only executor. Completion callbacks are also
+submission, connection management and close. Completion callbacks are also
 shared by management operations and remain in use.
 
 `requestPermission` shares a pending decision for the same attachment. Refusal
@@ -95,13 +100,23 @@ Native false/null results are preserved. Android exceptions retain their Java
 details; invalid arguments/ownership map to `ArgumentError`, and closed
 connections or ended sessions to `StateError`.
 
-Await `close()` for each connection. Close is idempotent and drains accepted
-operations, immediately rejecting new work. It invokes native close without
-individual interface releases. Even on a close error, the connection cannot be reused.
-Detach rejects further operations and queues native close. Engine
+Await `close()` for each connection. Close is idempotent and immediately rejects
+new work and operations not yet admitted to native access. It invokes native close
+without individual interface releases. Even on a close error, the connection
+cannot be reused.
+Native close waits only for admitted calls to return, not for older pending
+worker tasks or callback delivery. It cannot overlap those native calls because
+Android's management methods do not all share the framework close lock and
+native close frees the connection object. This lifetime guard adds no USB
+queue, timeout or cancellation policy. Detach also schedules native close. Engine
 destruction/hot restart unregister receivers, settle pending calls and close
 connections. Temporary JNI references are released eagerly; escaping descriptor
 references use native finalizers because the public API has no dispose method.
+
+Admission is the final lifecycle check while shared native access is held.
+Invalidation prevents pending operations from entering Android, but their Futures
+still settle through worker/callback scheduling. If an admitted native call does
+not return, close cannot finish. No session monitor is held while close waits.
 
 Event streams are broadcast streams without history. Attach while the engine is
 running is an event; USB-triggered app launch is initial state obtained through
@@ -116,9 +131,20 @@ the error translation above. Repeated Claim, Release without prior Claim and
 setting an alternate/configuration are not rejected based on operation history.
 Force is forwarded unchanged and does not guarantee success. The library records
 neither claims nor the active alternate setting; false/errors install no local
-restrictions or automatic recovery. Operations retain the per-connection FIFO
-queue, without release-specific admission blocking. Descriptor ownership and
-connection/session lifecycle validation still apply before native access.
+restrictions or automatic recovery. Operations share the session worker pool,
+without FIFO ordering or release-specific admission blocking. Dart requires
+Android descriptor adapters so their native references can be passed through JNI.
+Java does not check reference identity against the connection's descriptor tree;
+Android receives the supplied interface/configuration and decides the outcome.
+Connection/session lifecycle and device-session ownership checks remain in place.
+
+Android device adapters delegate `==` and `hashCode` to the framework's
+`UsbDevice.equals()` and `hashCode()`. Two Android device adapters with the same
+`deviceName` compare equal, even when they belong to different sessions or
+attachment UUIDs. Equality is not a liveness check and does not authorize use of
+an old attachment. Comparisons to strings or custom Dart device implementations
+return false; the native Java `equals(String)` convenience is not exposed as
+Dart equality because it would break symmetry with `String.==`.
 
 Each observed attachment has a private `deviceName-UUID` identity within the
 engine session. Enumerations retain it; observed absence retires it and a later
@@ -212,10 +238,14 @@ binding code by hand. `jni` supplies the runtime; `jnigen` is a development tool
 Android unit test sources in `android/src/test/java` target API 28, 31, 33 and 35
 to cover the permission PendingIntent and receiver API branches. They use
 Robolectric and mocked USB objects; they cover attachment identity, duplicate
-events, permission replies, ownership, connection queues and cleanup. Interface
-tests cover native true/false/error forwarding, repeated operations, original
-alternate descriptors, independent connections, FIFO ordering, foreign descriptor
-rejection, close failures and detach before queued Release reaches Android.
+events, permission replies, device-session ownership, parallel management work
+and cleanup. Interface tests cover native true/false/error forwarding, repeated
+operations, original alternate descriptors, independent connections, concurrent
+same-connection calls, forwarding of descriptors absent from the device registry,
+close failures and rejection before native admission. Controlled worker starts
+test close overtaking pending work; blocked native calls test lifetime protection
+during close, detach and pool shutdown. Direct FD/raw reads also have tests that
+hold native access while close is requested and verify rejection of later reads.
 `UsbHostProxyPluginTest` checks engine attach, restart, destruction and plugin
 detach using a mocked Flutter engine, without starting the Flutter runtime. It
 also checks initial/new Activity intents, both Intent/broadcast delivery orders,
@@ -234,12 +264,13 @@ branch or device behavior has been tested. The Windows pipe extensions,
 | Device/configuration/interface/endpoint fields | Dart adapters call original Android getters; the example uses fake descriptors in widget tests. | Real JNI getter results, indices, optional strings and static name/ID conversion. |
 | Permissions | Java tests cover coalescing, grant/refusal, stale/foreign objects, authorized requests, submission errors and session cleanup. | System permission UI, class-specific permission policy and OEM behavior. |
 | Open/Close and connection information | Java tests cover null/errors, late opens, serial values/errors, raw bytes/null/errors, FD results, close ordering and invalidation. | JNI byte-array conversion, error translation and real resource teardown. |
-| Claim/Release and setting selection | Java tests verify native booleans/exceptions, force, original descriptors, FIFO and independent connections. | Real kernel/device behavior, alternate settings and configuration changes; the example does not select settings. |
+| Claim/Release and setting selection | Java tests verify native booleans/exceptions, force, original descriptors, parallel execution and independent connections. | Real kernel/device behavior, alternate settings and configuration changes; the example does not select settings. |
 | Events and engine/Activity lifecycle | Java tests cover initial/new intents, broadcasts, deduplication, restart, listener removal and headless sessions. | Actual Flutter restart, USB app chooser and cold/warm launch on hardware. |
 
 There is no full API or branch-coverage measurement. In particular, the
-descriptor adapters, static device-name conversions, JNI finalizers and Dart
-exception mapping are not executed by the mock-backed Java/widget suites.
+descriptor adapters (including device equality/hashing), static device-name
+conversions, JNI finalizers and Dart exception mapping are not executed by the
+mock-backed Java/widget suites.
 
 Widget tests in `example/test` exercise the diagnostic UI using a fake manager,
 including None selectors, force forwarding, fixed section geometry, unlimited
@@ -254,8 +285,8 @@ screen, including its synchronous descriptor reads; lazy rows do not isolate
 those reads or bound the memory occupied by stored messages.
 Widget tests do not execute JNI. There is currently no automated Dart-to-JNI
 integration test or physical-device test; Java tests do not verify JNI reference
-ownership, Dart error mapping or real Android USB
-behavior. The [example](example/README.md) supports manual management checks on
+ownership, Dart error mapping or real Android USB behavior.
+The [example](example/README.md) supports manual management checks on
 Android hardware without transfers or configuration changes, with a broad USB
 launch filter. The example README lists test commands and their verification boundary.
 
@@ -263,11 +294,16 @@ On-device verification remains necessary for JNI descriptors/list keys and
 callbacks, permission grant/refusal, detach during pending work, same-name
 reattachment, independent devices, engine restart and USB-triggered launch.
 These are verification scenarios, not claims of completed hardware testing.
+For equality/hashing, compare adapters from consecutive enumerations and use
+them as Set/Map keys. A retired adapter can still compare equal to a later
+attachment with the same name; management through the retired handle must fail.
 `example/test/usb_request_test.dart` checks placeholder return values, idempotent
 no-op close and lack of buffer/native access. The withdrawn transport's buffer
 helpers, request lifecycle tests and generated request/result bindings are removed.
-The earlier close/active-transport issue has not been repaired or declared resolved;
-its affected transport paths are absent. Revisit it before adding transport again.
+The earlier close/active-transport issue remains outside this verification:
+transport paths are absent, and the lifetime guard covers only implemented
+management/information calls. Revisit transport ownership and close before
+adding transfers or requests again.
 
 ## References
 

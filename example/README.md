@@ -137,9 +137,10 @@ the connection remains unusable. Abrupt process termination cannot await Dart cl
 
 The UI action gate is deliberately screen-wide: it prevents opening another
 connection before previous action/cleanup futures settle. It is separate from
-the plugin's native per-connection queues. Permission checks and descriptor
-getters still follow the public API's synchronous JNI behavior; returning a
-Future does not by itself move those calls off the root isolate.
+the plugin's shared worker pool, which provides no FIFO ordering. Permission
+checks and descriptor getters still follow the public API's synchronous JNI
+behavior; returning a Future does not by itself move those calls off the root
+isolate.
 
 If a refresh fails, the last accepted list remains visible with an explicit error;
 it is not a fresh proof of presence. Successful refresh is not a hardware identity
@@ -159,7 +160,8 @@ passed to Claim/Release, not the active configuration or alternate setting.
   constrain variable data to their own scroll areas rather than growing the page.
 - `_interfaceOperation` invokes the chosen method and logs the returned boolean;
   `_run` reports exceptions without converting them to false. Java validates
-  descriptor ownership and lifecycle, leaving claim policy to Android.
+  connection lifecycle and forwards descriptors without checking reference
+  identity against the selected device's tree, leaving claim policy to Android.
   `_forceClaim` is only user input.
 - `_LogLevel` distinguishes USB events, successes, negative results, exceptions
   and ordinary information. `_log` appends category-colored entries and scrolls
@@ -186,9 +188,11 @@ Color tests include exception text resembling a USB/success message to ensure
 text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
-descriptor validation, ordering and lifecycle independently of the UI.
+descriptor forwarding, parallel execution and lifecycle independently of the UI.
 They also check device/connection serial values and errors, native FD/raw
 descriptor results, rejection after close and permission submission failures.
+Blocked direct FD/raw reads verify that native close waits for their return
+while later reads are rejected. This does not add any operation to the UI.
 This does not cover JNI conversion or native USB behavior. Static name/ID
 conversion, setting configuration/alternate settings and device serial reads
 are library features without dedicated controls in this diagnostic screen.

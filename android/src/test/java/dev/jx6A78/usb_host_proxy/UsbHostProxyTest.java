@@ -19,8 +19,10 @@ import java.lang.reflect.Field;
 import java.util.HashMap;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.After;
 import org.junit.Before;
@@ -255,7 +257,7 @@ public class UsbHostProxyTest {
         assertNull(closed.await().error);
     }
 
-    @Test public void queuesAreIndependentAndCloseWaitsForInflightOperation() throws Exception {
+    @Test public void sharedWorkersKeepConnectionsIndependentAndCloseWaitsForNativeUse() throws Exception {
         UsbHostProxy.Connection first = open();
         UsbDeviceConnection otherNativeConnection = mock(UsbDeviceConnection.class);
         when(manager.openDevice(usb)).thenReturn(otherNativeConnection);
@@ -555,6 +557,59 @@ public class UsbHostProxyTest {
         verify(nativeConnection, times(3)).getRawDescriptors();
     }
 
+    @Test public void closeWaitsForDirectFileDescriptorReadAndRejectsLaterReads() throws Exception {
+        assertCloseWaitsForDirectRead(false);
+    }
+
+    @Test public void closeWaitsForDirectRawDescriptorReadAndRejectsLaterReads() throws Exception {
+        assertCloseWaitsForDirectRead(true);
+    }
+
+    /** Exercises both direct JNI entry points with the native read held across close. */
+    private void assertCloseWaitsForDirectRead(boolean raw) throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        AtomicBoolean nativeInUse = new AtomicBoolean();
+        Object expected = raw ? new byte[] {0, (byte) 255} : Integer.valueOf(23);
+        org.mockito.stubbing.Answer<Object> read = call -> {
+            nativeInUse.set(true);
+            entered.countDown();
+            try {
+                assertTrue(unblock.await(10, TimeUnit.SECONDS));
+                return expected;
+            } finally { nativeInUse.set(false); }
+        };
+        if (raw) when(nativeConnection.getRawDescriptors()).thenAnswer(read);
+        else when(nativeConnection.getFileDescriptor()).thenAnswer(read);
+        doAnswer(call -> { assertFalse(nativeInUse.get()); return null; })
+            .when(nativeConnection).close();
+        UsbHostProxy.Connection connection = open();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread reader = new Thread(() -> {
+            try {
+                if (raw) assertSame(expected, connection.rawDescriptors());
+                else assertEquals(23, connection.fileDescriptor());
+            } catch (Throwable error) { failure.set(error); }
+        });
+        Result closed = new Result();
+        reader.start();
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            connection.close(closed);
+            assertEquals(1, closed.done.getCount());
+            verify(nativeConnection, never()).close();
+            assertThrows(IllegalStateException.class, connection::fileDescriptor);
+            assertThrows(IllegalStateException.class, connection::rawDescriptors);
+        } finally {
+            unblock.countDown();
+            reader.join(10_000);
+        }
+        assertFalse(reader.isAlive());
+        assertNull(failure.get());
+        assertNull(closed.await().error);
+        verify(nativeConnection, times(1)).close();
+    }
+
     @Test public void authorizedAndRetiredPermissionRequestsDoNotShowADialog() throws Exception {
         when(manager.hasPermission(usb)).thenReturn(true);
         Result authorized = new Result();
@@ -578,13 +633,9 @@ public class UsbHostProxyTest {
         assertEquals(1, permission.completions);
     }
 
-    @Test public void interfacesAndConfigurationUseOriginalObjectsAndRejectOtherDevices() throws Exception {
+    @Test public void interfacesAndConfigurationForwardOriginalObjectsWithoutDescriptorScanning() throws Exception {
         UsbInterface intf = mock(UsbInterface.class);
         UsbConfiguration config = mock(UsbConfiguration.class);
-        when(usb.getInterfaceCount()).thenReturn(1);
-        when(usb.getInterface(0)).thenReturn(intf);
-        when(usb.getConfigurationCount()).thenReturn(1);
-        when(usb.getConfiguration(0)).thenReturn(config);
         when(nativeConnection.claimInterface(intf, true)).thenReturn(true);
         when(nativeConnection.releaseInterface(intf)).thenReturn(true);
         when(nativeConnection.setInterface(intf)).thenReturn(true);
@@ -602,14 +653,14 @@ public class UsbHostProxyTest {
         assertEquals(true, select.await().value);
         assertEquals(true, configuration.await().value);
         assertEquals(true, release.await().value);
-        org.mockito.InOrder order = inOrder(nativeConnection);
-        order.verify(nativeConnection).claimInterface(intf, true);
-        order.verify(nativeConnection).setInterface(intf);
-        order.verify(nativeConnection).releaseInterface(intf);
-        order.verify(nativeConnection).setConfiguration(config);
-        Result wrong = new Result();
-        connection.claim(mock(UsbInterface.class), false, wrong);
-        assertTrue(wrong.await().error instanceof IllegalArgumentException);
+        verify(nativeConnection).claimInterface(intf, true);
+        verify(nativeConnection).setInterface(intf);
+        verify(nativeConnection).releaseInterface(intf);
+        verify(nativeConnection).setConfiguration(config);
+        verify(usb, never()).getInterfaceCount();
+        verify(usb, never()).getInterface(anyInt());
+        verify(usb, never()).getConfigurationCount();
+        verify(usb, never()).getConfiguration(anyInt());
         Result closed = new Result();
         connection.close(closed);
         closed.await();
@@ -649,30 +700,58 @@ public class UsbHostProxyTest {
         verify(nativeConnection).close();
     }
 
-    @Test public void explicitCloseDrainsAlreadyAcceptedOperationsInOrder() throws Exception {
+    @Test public void closeInvalidatesPendingManagementWithoutWaitingForWorkerOrder() throws Exception {
         UsbHostProxy.Connection connection = open();
-        CountDownLatch entered = new CountDownLatch(1);
-        CountDownLatch unblock = new CountDownLatch(1);
-        when(nativeConnection.getSerial()).thenAnswer(call -> {
-            entered.countDown();
-            assertTrue(unblock.await(10, TimeUnit.SECONDS));
-            return "serial";
-        });
-        Result first = new Result();
-        Result queued = new Result();
+        LinkedBlockingQueue<Runnable> workers = holdWorkers();
+        UsbInterface intf = mock(UsbInterface.class);
+        UsbConfiguration config = mock(UsbConfiguration.class);
+        Result serial = new Result();
+        Result claim = new Result();
+        Result release = new Result();
+        Result setting = new Result();
+        Result configuration = new Result();
+        connection.serial(serial);
+        connection.claim(intf, false, claim);
+        connection.release(intf, release);
+        connection.selectInterface(intf, setting);
+        connection.selectConfiguration(config, configuration);
         Result closed = new Result();
-        connection.serial(first);
-        assertTrue(entered.await(10, TimeUnit.SECONDS));
-        try {
-            connection.serial(queued);
-            connection.close(closed);
-        } finally { unblock.countDown(); }
-        assertEquals("serial", first.await().value);
-        assertEquals("serial", queued.await().value);
+        Result alsoClosed = new Result();
+        connection.close(closed);
+        connection.close(alsoClosed);
+        assertEquals(6, workers.size()); // Five operations and exactly one native close.
+        Runnable[] tasks = workers.toArray(new Runnable[0]);
+        tasks[0].run(); // Close has been requested but has not yet reached Android.
+        assertTrue(serial.await().error instanceof IllegalStateException);
+        assertThrows(IllegalStateException.class, connection::fileDescriptor);
+        assertThrows(IllegalStateException.class, connection::rawDescriptors);
+        assertTrue(claim(connection, intf).error instanceof IllegalStateException);
+        assertEquals(6, workers.size()); // Rejected admission schedules nothing.
+        verifyNoInteractions(nativeConnection);
+        tasks[5].run(); // Native close can run ahead of older, unstarted work.
         assertNull(closed.await().error);
-        org.mockito.InOrder order = inOrder(nativeConnection);
-        order.verify(nativeConnection, times(2)).getSerial();
-        order.verify(nativeConnection).close();
+        assertNull(alsoClosed.await().error);
+        for (int i = 1; i < 5; i++) tasks[i].run();
+        for (Result result : new Result[] {claim, release, setting, configuration}) {
+            assertTrue(result.await().error instanceof IllegalStateException);
+            assertEquals(1, result.completions);
+        }
+        verify(nativeConnection, times(1)).close();
+        verifyNoMoreInteractions(nativeConnection);
+    }
+
+    /** Holds pool tasks only in tests, allowing deterministic worker start/close races. */
+    private LinkedBlockingQueue<Runnable> holdWorkers() throws Exception {
+        Field field = UsbHostProxy.Session.class.getDeclaredField("workers");
+        field.setAccessible(true);
+        ExecutorService original = (ExecutorService) field.get(session);
+        ExecutorService controlled = mock(ExecutorService.class);
+        LinkedBlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
+        doAnswer(call -> { tasks.add(call.getArgument(0)); return null; })
+            .when(controlled).execute(any(Runnable.class));
+        doAnswer(call -> { original.shutdown(); return null; }).when(controlled).shutdown();
+        field.set(session, controlled);
+        return tasks;
     }
 
     /** Adds an original descriptor; alternate settings can deliberately share a number. */
@@ -684,7 +763,7 @@ public class UsbHostProxyTest {
         return intf;
     }
 
-    /** Awaits the real backend queue without simulating Android's claim policy. */
+    /** Awaits backend work without simulating Android's claim policy. */
     private Result claim(UsbHostProxy.Connection connection, UsbInterface intf) throws Exception {
         Result result = new Result();
         connection.claim(intf, false, result);
@@ -768,11 +847,13 @@ public class UsbHostProxyTest {
         verify(otherNative, times(1)).releaseInterface(one);
     }
 
-    @Test public void queuedReleaseDoesNotRejectFollowingOperationsAndFifoOrderingRemains() throws Exception {
+    @Test public void managementCallsOnOneConnectionCanFinishWhileSerialIsStillRunning() throws Exception {
         UsbInterface intf = interfaceAt(0, 0);
         when(nativeConnection.claimInterface(intf, false)).thenReturn(true);
         when(nativeConnection.releaseInterface(intf)).thenReturn(true);
         when(nativeConnection.setInterface(intf)).thenReturn(true);
+        UsbConfiguration config = mock(UsbConfiguration.class);
+        when(nativeConnection.setConfiguration(config)).thenReturn(true);
         UsbHostProxy.Connection connection = open();
         assertEquals(true, claim(connection, intf).value);
         CountDownLatch entered = new CountDownLatch(1);
@@ -789,44 +870,62 @@ public class UsbHostProxyTest {
         Result releasing = new Result();
         Result after = new Result();
         Result laterClaim = new Result();
+        Result configuration = new Result();
         try {
             connection.selectInterface(intf, before);
             connection.release(intf, releasing);
             connection.selectInterface(intf, after);
             connection.claim(intf, false, laterClaim);
-            assertEquals(1, after.done.getCount());
-            assertEquals(1, laterClaim.done.getCount());
+            connection.selectConfiguration(config, configuration);
+            assertEquals(true, before.await().value);
+            assertEquals(true, releasing.await().value);
+            assertEquals(true, after.await().value);
+            assertEquals(true, laterClaim.await().value);
+            assertEquals(true, configuration.await().value);
+            assertEquals(1, serial.done.getCount());
         } finally { unblock.countDown(); }
         assertNull(serial.await().error);
-        assertEquals(true, before.await().value);
-        assertEquals(true, releasing.await().value);
-        assertEquals(true, after.await().value);
-        assertEquals(true, laterClaim.await().value);
-        org.mockito.InOrder order = inOrder(nativeConnection);
-        order.verify(nativeConnection).claimInterface(intf, false);
-        order.verify(nativeConnection).getSerial();
-        order.verify(nativeConnection).setInterface(intf);
-        order.verify(nativeConnection).releaseInterface(intf);
-        order.verify(nativeConnection).setInterface(intf);
-        order.verify(nativeConnection).claimInterface(intf, false);
+        verify(nativeConnection, times(2)).claimInterface(intf, false);
+        verify(nativeConnection).getSerial();
+        verify(nativeConnection, times(2)).setInterface(intf);
+        verify(nativeConnection).releaseInterface(intf);
+        verify(nativeConnection).setConfiguration(config);
     }
 
-    @Test public void foreignDescriptorsAreRejectedAndAllFourNativeExceptionsArePreserved() throws Exception {
-        UsbInterface intf = interfaceAt(0, 0);
+    @Test public void descriptorsOutsideDeviceRegistryReachAndroidAndPreserveNativeResults() throws Exception {
+        UsbInterface intf = mock(UsbInterface.class);
         UsbConfiguration config = mock(UsbConfiguration.class);
-        when(usb.getConfigurationCount()).thenReturn(1);
-        when(usb.getConfiguration(0)).thenReturn(config);
+        when(nativeConnection.claimInterface(intf, false)).thenReturn(true, false);
+        when(nativeConnection.releaseInterface(intf)).thenReturn(false, true);
+        when(nativeConnection.setInterface(intf)).thenReturn(true, false);
+        when(nativeConnection.setConfiguration(config)).thenReturn(false, true);
         UsbHostProxy.Connection connection = open();
-        UsbInterface foreign = mock(UsbInterface.class);
-        assertTrue(claim(connection, foreign).error instanceof IllegalArgumentException);
-        assertTrue(release(connection, foreign).error instanceof IllegalArgumentException);
-        Result foreignSetting = new Result();
-        connection.selectInterface(foreign, foreignSetting);
-        assertTrue(foreignSetting.await().error instanceof IllegalArgumentException);
-        Result foreignConfiguration = new Result();
-        connection.selectConfiguration(mock(UsbConfiguration.class), foreignConfiguration);
-        assertTrue(foreignConfiguration.await().error instanceof IllegalArgumentException);
-        verifyNoInteractions(nativeConnection);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            assertEquals(attempt == 0, claim(connection, intf).value);
+            assertEquals(attempt != 0, release(connection, intf).value);
+            Result setting = new Result();
+            connection.selectInterface(intf, setting);
+            assertEquals(attempt == 0, setting.await().value);
+            assertNull(setting.error);
+            Result configuration = new Result();
+            connection.selectConfiguration(config, configuration);
+            assertEquals(attempt != 0, configuration.await().value);
+            assertNull(configuration.error);
+        }
+        verify(nativeConnection, times(2)).claimInterface(intf, false);
+        verify(nativeConnection, times(2)).releaseInterface(intf);
+        verify(nativeConnection, times(2)).setInterface(intf);
+        verify(nativeConnection, times(2)).setConfiguration(config);
+        verify(usb, never()).getInterfaceCount();
+        verify(usb, never()).getInterface(anyInt());
+        verify(usb, never()).getConfigurationCount();
+        verify(usb, never()).getConfiguration(anyInt());
+    }
+
+    @Test public void allFourNativeExceptionsArePreservedWithoutDescriptorValidation() throws Exception {
+        UsbInterface intf = mock(UsbInterface.class);
+        UsbConfiguration config = mock(UsbConfiguration.class);
+        UsbHostProxy.Connection connection = open();
 
         SecurityException claimError = new SecurityException("native claim failed");
         SecurityException releaseError = new SecurityException("native release failed");
@@ -861,9 +960,6 @@ public class UsbHostProxyTest {
         when(nativeConnection.claimInterface(intf, false)).thenReturn(false, true);
         when(nativeConnection.setConfiguration(config)).thenReturn(false, true, false, true);
         UsbHostProxy.Connection connection = open();
-        Result invalid = new Result();
-        connection.selectConfiguration(mock(UsbConfiguration.class), invalid);
-        assertTrue(invalid.await().error instanceof IllegalArgumentException);
         Result failed = new Result();
         connection.selectConfiguration(config, failed);
         assertEquals(false, failed.await().value);
@@ -912,6 +1008,9 @@ public class UsbHostProxyTest {
             Result selected = new Result();
             connection.selectInterface(intf, selected);
             assertTrue(selected.await().error instanceof IllegalStateException);
+            Result configuration = new Result();
+            connection.selectConfiguration(mock(UsbConfiguration.class), configuration);
+            assertTrue(configuration.await().error instanceof IllegalStateException);
         } finally { unblock.countDown(); }
         assertNull(serial.await().error);
         assertSame(error, closing.await().error);
@@ -921,36 +1020,60 @@ public class UsbHostProxyTest {
         assertTrue(release(connection, intf).error instanceof IllegalStateException);
         verify(nativeConnection, times(1)).close();
         verify(nativeConnection, never()).releaseInterface(any());
+        verify(nativeConnection, never()).setConfiguration(any());
     }
 
-    @Test public void detachDiscardsQueuedReleaseWithoutCallingNativeRelease() throws Exception {
+    @Test public void detachDiscardsUnstartedReleaseWithoutCallingNativeRelease() throws Exception {
         UsbInterface intf = interfaceAt(0, 0);
         when(nativeConnection.claimInterface(intf, false)).thenReturn(true);
         UsbHostProxy.Connection connection = open();
         assertEquals(true, claim(connection, intf).value);
-        CountDownLatch entered = new CountDownLatch(1);
-        CountDownLatch unblock = new CountDownLatch(1);
-        when(nativeConnection.getSerial()).thenAnswer(call -> {
-            entered.countDown();
-            assertTrue(unblock.await(10, TimeUnit.SECONDS));
-            return "serial";
-        });
-        Result serial = new Result();
-        connection.serial(serial);
-        assertTrue(entered.await(10, TimeUnit.SECONDS));
-        Result queuedRelease = new Result();
-        try {
-            connection.release(intf, queuedRelease);
-            detachDevice();
-            assertTrue(claim(connection, intf).error instanceof IllegalStateException);
-        } finally { unblock.countDown(); }
-        assertNull(serial.await().error);
-        assertTrue(queuedRelease.await().error instanceof IllegalStateException);
-        assertNull(queuedRelease.value); // Not a native false result.
+        LinkedBlockingQueue<Runnable> workers = holdWorkers();
+        Result pendingRelease = new Result();
+        connection.release(intf, pendingRelease);
+        detachDevice();
+        assertTrue(claim(connection, intf).error instanceof IllegalStateException);
+        assertEquals(2, workers.size());
+        workers.remove().run();
+        assertTrue(pendingRelease.await().error instanceof IllegalStateException);
+        assertNull(pendingRelease.value); // Not a native false result.
+        workers.remove().run();
         Result closed = new Result();
         connection.close(closed);
         assertNull(closed.await().error);
         verify(nativeConnection).close();
         verify(nativeConnection, never()).releaseInterface(any());
+    }
+
+    @Test public void sessionEndDuringNativeUseSettlesOnceAndClosesAfterNativeReturn() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        AtomicBoolean nativeInUse = new AtomicBoolean();
+        when(nativeConnection.getSerial()).thenAnswer(call -> {
+            nativeInUse.set(true);
+            entered.countDown();
+            try {
+                assertTrue(unblock.await(10, TimeUnit.SECONDS));
+                return "serial";
+            } finally { nativeInUse.set(false); }
+        });
+        doAnswer(call -> { assertFalse(nativeInUse.get()); return null; })
+            .when(nativeConnection).close();
+        Result serial = new Result();
+        connection.serial(serial);
+        assertTrue(entered.await(10, TimeUnit.SECONDS));
+        try {
+            detachDevice();
+            UsbHostProxy.detach(42); // Shuts down the shared pool without blocking this thread.
+            assertTrue(serial.await().error instanceof IllegalStateException);
+            assertEquals(1, serial.completions);
+            verify(nativeConnection, never()).close();
+        } finally { unblock.countDown(); }
+        Result closed = new Result();
+        connection.close(closed);
+        assertNull(closed.await().error);
+        assertEquals(1, serial.completions);
+        verify(nativeConnection, times(1)).close();
     }
 }

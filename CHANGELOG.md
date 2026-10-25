@@ -1,22 +1,32 @@
 ## 0.2.0 (unreleased)
 
+- Document native admission, pending Future completion and close waiting;
+  extend lifetime tests to direct file-descriptor and raw-descriptor reads.
+- Remove per-connection FIFO executors; dispatch management operations and close
+  through the existing session worker pool. Close rejects unstarted native work
+  immediately and uses exclusive lifetime protection after admitted calls return;
+  management calls can run concurrently, with no FIFO or callback-order guarantee.
+- Delegate Android device equality and hashing to native UsbDevice methods,
+  independently of private attachment UUIDs. Remove interface/configuration
+  reference-identity validation while retaining session and connection lifecycle
+  checks; forward descriptors and preserve Android results and exceptions.
 - Clarify management implementation versus test coverage, application-owned
   targetSdk and unsupported-operation errors; add information/permission
   regression tests without changing management behavior.
 - Withdraw experimental bulk/control/request transport and its JNI buffer,
   completion-observer and request ownership state. Keep the public declarations:
   Android connection transport is unsupported and UsbRequest is a no-op placeholder.
-- Retain management workers, Completion callbacks and the per-connection FIFO;
+- Retain management workers and Completion callbacks;
   remove only transport-specific tests/helpers and regenerate private bindings.
-- Keep native close/active-transport investigation unresolved; this withdrawal
-  removes the affected implementation rather than changing its close policy.
+- Keep native close/active-transport investigation unresolved; the current
+  lifetime guard covers implemented management/information calls only.
 - Retain the existing single-root-isolate initialization and one listener per
   engine; add regression coverage that a second listener cannot replace the first.
 - Require Android API 28 (Android 9) or later in the plugin and diagnostic example.
 - Implement Android USB Host enumeration, descriptor access, permissions,
   connection management, interface/configuration selection and device events
   using JNI/JNIgen, without data transport.
-- Keep blocking connection operations on independent per-connection queues;
+- Run blocking connection operations on shared session workers;
   close connections on detach and engine shutdown/restart.
 - Identify observed attachments privately by `deviceName-UUID`, retaining the
   UUID across enumerations without changing Android names or public list keys.

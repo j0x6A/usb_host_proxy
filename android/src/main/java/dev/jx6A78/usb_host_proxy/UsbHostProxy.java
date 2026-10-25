@@ -22,12 +22,13 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Android backend exposed to Dart through JNIgen, without USB data transport.
  *
  * <p>Framework USB objects remain the source of descriptor data. This class adds
- * attachment identity, engine ownership, permission callbacks and operation queues.
+ * attachment identity, engine ownership, permission callbacks and native lifetime protection.
  * The class monitor guards the engine registry; each Session guards its own state.
  */
 public final class UsbHostProxy {
@@ -122,7 +123,7 @@ public final class UsbHostProxy {
      *
      * <p>The session monitor guards devices, permissions, calls, connections and event
      * delivery. Normal worker operations run outside it; publication and late-open
-     * cleanup reacquire it. Each connection's queue orders only that connection.
+     * cleanup reacquire it. Connection operations share the worker pool without FIFO.
      */
     public static final class Session {
         /** Application context, so the session does not retain an Activity. */
@@ -135,9 +136,9 @@ public final class UsbHostProxy {
         private final ExecutorService workers = Executors.newCachedThreadPool();
         /** Name index of current wrappers; the name is a locator, not lifetime identity. */
         private final Map<String, Device> devices = new HashMap<>();
-        /** Published connections, retained until their queued close finishes. */
+        /** Published connections, retained until their worker close finishes. */
         private final Set<Connection> connections = new HashSet<>();
-        /** Unsettled callbacks, including operations waiting in connection queues. */
+        /** Unsettled callbacks, including operations not yet admitted to native access. */
         private final Set<Call> calls = new HashSet<>();
         /** Request code to coalesced permission decision for one attachment. */
         private final Map<Integer, Permission> permissions = new HashMap<>();
@@ -402,7 +403,7 @@ public final class UsbHostProxy {
         }
 
         /**
-         * Invalidates one wrapper, resolves its permissions false and queues its closes.
+         * Invalidates one wrapper, resolves its permissions false and schedules its closes.
          * Requires the session monitor. notify is false during engine disposal, which
          * must not manufacture physical detach events. Repeated retirement is harmless.
          */
@@ -427,7 +428,7 @@ public final class UsbHostProxy {
 
         /**
          * Ends the session, unregisters receivers and settles pending calls with errors.
-         * Queued native closes may finish later; shutdown does not join worker threads.
+         * Accepted native closes may finish later; shutdown does not join worker threads.
          */
         private synchronized void dispose() {
             if (!active) return;
@@ -511,29 +512,29 @@ public final class UsbHostProxy {
 
     /**
      * Owns one framework connection, bound permanently to one attachment wrapper.
-     * Descriptor origin and lifecycle are validated here; Android/kernel decide
+     * Connection lifecycle is validated here; Android/kernel decide
      * interface claim and setting policy. No claim or alternate-setting history is kept.
      *
-     * <p>Lifecycle changes acquire the session monitor before readLock. Synchronous
-     * reads use readLock alone; native close also uses it. Accepted management work
-     * and close are serialized on this connection's queue, never on a global queue.
+     * <p>Native calls share a lifetime read lock; close alone takes its write lock.
+     * This allows concurrent operations while preventing close from freeing an object
+     * still in native use. Close marks admission closed under the session monitor,
+     * but never waits for native access while holding that monitor. Workers release
+     * native access before delivering callbacks or finalizing close under the monitor.
      */
     public static final class Connection {
         /** Session responsible for tracking this connection and its callbacks. */
         private final Session owner;
         /** Exact attachment used at open time; never rebound after name reuse. */
         private final Device device;
-        /** FIFO executor for this connection's management operations and final close. */
-        private final ExecutorService queue = Executors.newSingleThreadExecutor();
-        /** Guards direct descriptor reads, native close and connection lifecycle flags. */
-        private final Object readLock = new Object();
-        /** Original native connection; cleared after the queued close attempt. */
+        /** Shared native access for operations; exclusive access for native close. */
+        private final ReentrantReadWriteLock nativeLifetime = new ReentrantReadWriteLock();
+        /** Original native connection; accessed only under the lifetime lock. */
         private UsbDeviceConnection connection;
-        /** Rejects new work as soon as close is scheduled, before native close finishes. */
-        private boolean closing = false;
-        /** Marks completion of the native close attempt, including a failed attempt. */
+        /** Set under the session monitor; volatile so direct reads reject close immediately. */
+        private volatile boolean closing = false;
+        /** Session-guarded completion of the native close attempt, including failure. */
         private boolean closed = false;
-        /** Close callers awaiting the same queued close result; session-monitor guarded. */
+        /** Close callers awaiting the same close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
 
         /** Takes ownership of a successfully opened native connection. */
@@ -543,100 +544,88 @@ public final class UsbHostProxy {
             this.connection = connection;
         }
 
-        /** Rejects reads after close scheduling; caller holds readLock. */
+        /** Rejects access after close scheduling, including before taking a native lock. */
         private void checkOpen() {
             if (closing) throw new IllegalStateException("USB connection is closed or detached");
         }
 
         /** Returns the native descriptor without transferring ownership of it to the caller. */
         public int fileDescriptor() {
-            synchronized (readLock) {
+            checkOpen();
+            nativeLifetime.readLock().lock();
+            try {
                 checkOpen();
                 return connection.getFileDescriptor();
-            }
+            } finally { nativeLifetime.readLock().unlock(); }
         }
 
         /** Reads Android's raw descriptor bytes while excluding native close; may return null. */
         public byte[] rawDescriptors() {
-            synchronized (readLock) {
+            checkOpen();
+            nativeLifetime.readLock().lock();
+            try {
                 checkOpen();
                 return connection.getRawDescriptors();
-            }
+            } finally { nativeLifetime.readLock().unlock(); }
         }
 
         /**
-         * Enqueues management work and checks attachment validity before executing it.
-         * Explicit close drains accepted work; retirement invalidates queued work.
-         * An operation already inside a native call is not forcibly interrupted.
+         * Dispatches unordered management work through the session's existing pool.
+         * Admission to native access is the final lifecycle check under the shared
+         * lifetime lock. Close/retirement rejects work that has not passed this check;
+         * admitted native calls finish before native close can acquire exclusive access.
          */
         private void submit(Completion completion, Callable<Object> operation) {
             synchronized (owner) {
                 Call call = new Call(owner, completion);
-                synchronized (readLock) {
-                    if (closing) { call.finish(null, new IllegalStateException("USB connection is closed or detached")); return; }
-                    queue.execute(() -> {
+                if (closing) { call.finish(null, new IllegalStateException("USB connection is closed or detached")); return; }
+                owner.workers.execute(() -> {
+                    try {
+                        checkOpen();
+                        Object value;
+                        nativeLifetime.readLock().lock();
                         try {
-                            // Explicit close drains accepted work; detach/session end
-                            // invalidates queued work before it touches the device.
-                            synchronized (owner) { owner.checkDevice(device); }
-                            call.finish(operation.call(), null);
-                        } catch (Throwable error) { call.finish(null, error); }
-                    });
-                }
+                            synchronized (owner) {
+                                owner.checkDevice(device);
+                                checkOpen();
+                            }
+                            value = operation.call();
+                        } finally { nativeLifetime.readLock().unlock(); }
+                        call.finish(value, null);
+                    } catch (Throwable error) { call.finish(null, error); }
+                });
             }
         }
 
-        /** Reads the native connection's serial on its ordered operation queue. */
+        /** Reads the native connection's serial on a session worker. */
         public void serial(Completion completion) {
             submit(completion, () -> connection.getSerial());
         }
 
-        /** Requires the original interface reference from this device, not matching numeric IDs. */
-        private void checkInterface(UsbInterface intf) {
-            for (int i = 0; i < device.usbDevice.getInterfaceCount(); i++) {
-                if (device.usbDevice.getInterface(i) == intf) return;
-            }
-            throw new IllegalArgumentException("Interface belongs to another device attachment");
-        }
-
-        /** Validates the original descriptor and forwards claim/force, preserving Android's result. */
+        /** Forwards claim/force without imposing descriptor-reference identity rules. */
         public void claim(UsbInterface intf, boolean force, Completion completion) {
-            submit(completion, () -> {
-                checkInterface(intf);
-                return connection.claimInterface(intf, force);
-            });
+            submit(completion, () -> connection.claimInterface(intf, force));
         }
 
         /** Forwards release without requiring a prior claim or recording ownership history. */
         public void release(UsbInterface intf, Completion completion) {
-            submit(completion, () -> {
-                checkInterface(intf);
-                return connection.releaseInterface(intf);
-            });
+            submit(completion, () -> connection.releaseInterface(intf));
         }
 
         /** Forwards the alternate-setting request; Android decides whether it is allowed. */
         public void selectInterface(UsbInterface intf, Completion completion) {
-            submit(completion, () -> {
-                checkInterface(intf);
-                return connection.setInterface(intf);
-            });
+            submit(completion, () -> connection.setInterface(intf));
         }
 
-        /** Validates the original configuration and forwards the native result without local policy. */
+        /** Forwards the configuration without scanning this device's descriptor references. */
         public void selectConfiguration(UsbConfiguration configuration, Completion completion) {
-            submit(completion, () -> {
-                for (int i = 0; i < device.usbDevice.getConfigurationCount(); i++) {
-                    if (device.usbDevice.getConfiguration(i) == configuration) {
-                        return connection.setConfiguration(configuration);
-                    }
-                }
-                throw new IllegalArgumentException("Configuration belongs to another device attachment");
-            });
+            submit(completion, () -> connection.setConfiguration(configuration));
         }
 
         /**
-         * Schedules one native close after accepted work; concurrent callers share its result.
+         * Rejects pending/new work and dispatches one close to the session worker pool.
+         * Native close waits only for admitted native calls, without FIFO ordering.
+         * Concurrent callers share its result.
          * A null completion is used by lifecycle cleanup. Already-closed calls succeed;
          * a failure from the first native close attempt is not replayed to later callers.
          * No interface releases are issued here. The connection stays unusable even
@@ -649,23 +638,25 @@ public final class UsbHostProxy {
                     if (closed) { call.finish(null, null); return; }
                     closeWaiters.add(call);
                 }
-                synchronized (readLock) {
-                    if (closing) return;
-                    closing = true;
-                    queue.execute(() -> {
-                        Throwable error = null;
-                        try {
-                            synchronized (readLock) { connection.close(); }
-                        } catch (Throwable failure) { error = failure; }
-                        synchronized (owner) {
-                            synchronized (readLock) { connection = null; closed = true; }
-                            owner.connections.remove(this);
-                            for (Call waiter : closeWaiters) waiter.finish(null, error);
-                            closeWaiters.clear();
-                        }
-                    });
-                    queue.shutdown();
-                }
+                if (closing) return;
+                closing = true;
+                owner.workers.execute(() -> {
+                    Throwable error = null;
+                    nativeLifetime.writeLock().lock();
+                    try {
+                        connection.close();
+                    } catch (Throwable failure) { error = failure; }
+                    finally {
+                        connection = null;
+                        nativeLifetime.writeLock().unlock();
+                    }
+                    synchronized (owner) {
+                        closed = true;
+                        owner.connections.remove(this);
+                        for (Call waiter : closeWaiters) waiter.finish(null, error);
+                        closeWaiters.clear();
+                    }
+                });
             }
         }
     }
