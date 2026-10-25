@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart'
+    show ErrorDescription, FlutterError, FlutterErrorDetails;
 import 'package:jni/jni.dart';
 
 import '../usb_configuration.dart';
@@ -11,10 +13,11 @@ import '../usb_endpoint.dart';
 import '../usb_interface.dart';
 import '../usb_request.dart';
 import 'bindings.g.dart' as j;
+import 'device_lifetime.dart';
 
 // JNI references, not cached USB descriptor fields, are owned by these adapters.
-// Temporary references are released eagerly. Escaping references use JNI's native
-// finalizer because the public descriptor API has no dispose/release operation.
+// Temporary references are released eagerly. Device invalidation explicitly
+// releases retained references; native finalizers also cover unused adapters.
 /// Translates Java state/argument failures; other Java exceptions remain intact.
 ///
 /// The caught exception reference is released here only when it is replaced by a
@@ -100,6 +103,53 @@ bool _boolean(JObject? value) =>
 String? _resultString(JObject? value) =>
     value?.as(JString.type).use((v) => v.toDartString());
 
+/// Does not publish successful results belonging to a device that has since ended.
+Future<T> _deviceCall<T>(
+  DeviceLifetime lifetime,
+  void Function(j.UsbHostProxy$Completion) start,
+  T Function(JObject? value) decode,
+) async {
+  lifetime.checkAlive();
+  return _call(start, (value) {
+    lifetime.checkAlive();
+    return decode(value);
+  });
+}
+
+/// Reports automatic cleanup failures through Flutter's existing error handler.
+void _cleanupError(Object error, StackTrace stack) {
+  FlutterError.reportError(
+    FlutterErrorDetails(
+      exception: error,
+      stack: stack,
+      library: 'usb_host_proxy',
+      context: ErrorDescription('while releasing an invalidated USB resource'),
+    ),
+  );
+}
+
+/// One Java validity flag shared by all snapshots and descendants of a device.
+/// Its object identity correlates cleanup only; public equality still uses names.
+final class _DeviceContext {
+  j.UsbHostProxy$Lifetime? _tag;
+  late final DeviceLifetime lifetime;
+
+  _DeviceContext(j.UsbHostProxy$Lifetime tag, String name, int hash)
+    : _tag = tag {
+    lifetime = DeviceLifetime(
+      name: name,
+      nativeHash: hash,
+      nativeIsAlive: () => _java(() => _tag!.isAlive),
+      releaseNative: () {
+        final reference = _tag;
+        _tag = null;
+        reference?.release();
+      },
+      reportError: _cleanupError,
+    );
+  }
+}
+
 /// Internal Android backend, shared by managers in the engine's root isolate.
 final class AndroidUsb {
   /// Lazily binds the root isolate to the session already registered by Java.
@@ -108,10 +158,13 @@ final class AndroidUsb {
   /// Session JNI reference, released and cleared by the disposed callback.
   j.UsbHostProxy$Session? _reference;
 
+  /// Active resource owners; ended owners are never reused for a new presence.
+  final _devices = <String, _DeviceContext>{};
+
   /// Live attachment notifications, dropped when no Dart listener is present.
   final _attached = StreamController<UsbDevice>.broadcast();
 
-  /// Observed name-removal notifications; descriptor references remain readable.
+  /// Removal notifications carrying only the device's immutable name/hash.
   final _detached = StreamController<UsbDevice>.broadcast();
 
   /// Installs one asynchronous JNIgen event listener; does not enumerate devices.
@@ -128,8 +181,12 @@ final class AndroidUsb {
         detached$async: true,
         disposed$async: true,
         attached: (device) => _event(_attached, device),
-        detached: (device) => _event(_detached, device),
+        detached: (device) => _event(_detached, device, detached: true),
         disposed: () {
+          for (final context in _devices.values.toList()) {
+            context.lifetime.invalidate();
+          }
+          _devices.clear();
           _reference?.release();
           _reference = null;
           unawaited(_attached.close());
@@ -152,21 +209,67 @@ final class AndroidUsb {
   j.UsbHostProxy$Session get _session =>
       _reference ?? (throw StateError('USB session has ended'));
 
-  /// Transfers an incoming device handle into an adapter, or releases it if unused.
+  /// Finds the resource owner without confusing a late old event with a new name reuse.
+  DeviceLifetime _lifetime(j.UsbHostProxy$Device device) {
+    final tag = _java(() => device.lifetime)!;
+    late final String name;
+    late final int hash;
+    late final bool alive;
+    _DeviceContext? previous;
+    var same = false;
+    try {
+      name = _java(() => _string(tag.name)!);
+      hash = _java(() => tag.deviceHash);
+      alive = _java(() => tag.isAlive);
+      previous = _devices[name];
+      final previousTag = previous?._tag;
+      // Lifetime inherits Object.equals: JNI equality here is Java object identity.
+      same = previousTag != null && _java(() => previousTag == tag);
+    } catch (_) {
+      tag.release();
+      rethrow;
+    }
+    if (same) {
+      tag.release();
+      if (!alive) {
+        _devices.remove(name);
+        previous!.lifetime.invalidate();
+      }
+      return previous!.lifetime;
+    }
+    final context = _DeviceContext(tag, name, hash);
+    if (alive && _reference != null) {
+      _devices.remove(name)?.lifetime.invalidate();
+      _devices[name] = context;
+    } else {
+      context.lifetime.invalidate();
+    }
+    return context.lifetime;
+  }
+
+  /// Cleanup runs even without public stream subscribers. A detach payload owns no JNI.
   void _event(
     StreamController<UsbDevice> stream,
-    j.UsbHostProxy$Device? device,
-  ) {
+    j.UsbHostProxy$Device? device, {
+    bool detached = false,
+  }) {
     if (device == null) return;
-    if (!stream.hasListener || stream.isClosed) {
-      device.release();
-      return;
-    }
+    var transferred = false;
     try {
-      stream.add(_AndroidDevice(device));
+      final lifetime = _lifetime(device);
+      if (detached) lifetime.invalidate();
+      if (!stream.hasListener || stream.isClosed || _reference == null) return;
+      if (detached) {
+        stream.add(_AndroidDevice.detached(lifetime));
+      } else if (lifetime.isActive) {
+        // The factory consumes the handle, including on failure.
+        transferred = true;
+        stream.add(_AndroidDevice.live(device, lifetime));
+      }
     } catch (error, stack) {
-      device.release();
-      stream.addError(error, stack);
+      if (!stream.isClosed && stream.hasListener) stream.addError(error, stack);
+    } finally {
+      if (!transferred) device.release();
     }
   }
 
@@ -186,12 +289,15 @@ final class AndroidUsb {
       final result = <String, UsbDevice>{};
       for (var i = 0; i < array.length; i++) {
         final handle = array[i]!;
+        var transferred = false;
         try {
-          final device = _AndroidDevice(handle);
+          final lifetime = _lifetime(handle);
+          if (!lifetime.isActive) continue;
+          transferred = true;
+          final device = _AndroidDevice.live(handle, lifetime);
           result[device.getDeviceName()] = device;
-        } catch (_) {
-          handle.release();
-          rethrow;
+        } finally {
+          if (!transferred) handle.release();
         }
       }
       return result;
@@ -217,18 +323,34 @@ final class AndroidUsb {
       _java(() => _session.hasPermission(_device(device).handle));
 
   /// Awaits the coalesced native decision for this Android name, without a timeout.
-  Future<bool> requestPermission(UsbDevice device) => _call(
-    (callback) => _session.requestPermission(_device(device).handle, callback),
-    _boolean,
-  );
+  Future<bool> requestPermission(UsbDevice device) async {
+    final selected = _device(device);
+    selected.lifetime.checkAlive();
+    // An already-pending permission request still resolves false on detach.
+    return _call(
+      (callback) => _session.requestPermission(selected.handle, callback),
+      (value) {
+        final granted = _boolean(value);
+        if (granted) selected.lifetime.checkAlive();
+        return granted;
+      },
+    );
+  }
 
   /// Wraps a published native connection, preserving null and Android failures.
-  Future<UsbDeviceConnection?> openDevice(UsbDevice device) => _call(
-    (callback) => _session.open(_device(device).handle, callback),
-    (value) => value == null
-        ? null
-        : _AndroidConnection(value.as(j.UsbHostProxy$Connection.type)),
-  );
+  Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
+    final selected = _device(device);
+    return _deviceCall(
+      selected.lifetime,
+      (callback) => _session.open(selected.handle, callback),
+      (value) => value == null
+          ? null
+          : _AndroidConnection(
+              value.as(j.UsbHostProxy$Connection.type),
+              selected.lifetime,
+            ),
+    );
+  }
 
   /// Uses Android's name-to-ID conversion and releases the temporary Java input.
   static int deviceId(String name) => _java(() {
@@ -245,32 +367,59 @@ final class AndroidUsb {
       _java(() => _string(j.UsbDevice.getDeviceName(id)));
 }
 
-/// Device adapter: lifecycle operations use [handle], descriptors use [native].
-///
-/// Getter contracts are documented by [UsbDevice]. No descriptor fields are
-/// cached in Dart; both escaping JNI references use native finalizers.
+/// Live descriptors use JNI; name/hash alone remain usable after invalidation.
 final class _AndroidDevice implements UsbDevice {
-  /// Java device view and owning engine session, without an attachment token.
-  final j.UsbHostProxy$Device handle;
+  final DeviceLifetime lifetime;
+  final DeviceReference<j.UsbHostProxy$Device>? _handle;
+  final DeviceReference<j.UsbDevice>? _native;
 
-  /// Original Android descriptor object, not a copy of its fields.
-  final j.UsbDevice native;
+  j.UsbHostProxy$Device get handle {
+    lifetime.checkAlive();
+    return _handle!.value;
+  }
 
-  /// Takes the escaping wrapper reference and obtains its descriptor reference.
-  _AndroidDevice(this.handle) : native = _java(() => handle.usbDevice)!;
+  j.UsbDevice get native {
+    lifetime.checkAlive();
+    return _native!.value;
+  }
+
+  _AndroidDevice._(this.lifetime, this._handle, this._native);
+
+  /// Takes ownership even on failure, so callers never release a handle twice.
+  factory _AndroidDevice.live(
+    j.UsbHostProxy$Device handle,
+    DeviceLifetime lifetime,
+  ) {
+    late final j.UsbDevice descriptor;
+    try {
+      lifetime.checkAlive();
+      descriptor = _java(handle.descriptor)!;
+    } catch (_) {
+      handle.release();
+      rethrow;
+    }
+    return _AndroidDevice._(
+      lifetime,
+      DeviceReference(lifetime, handle, (value) => value.release()),
+      DeviceReference(lifetime, descriptor, (value) => value.release()),
+    );
+  }
+
+  _AndroidDevice.detached(this.lifetime) : _handle = null, _native = null;
 
   /// Uses Android's name-based equality, independently of wrapper identity.
   @override
   bool operator ==(Object other) =>
-      other is _AndroidDevice && _java(() => native.equals(other.native));
+      other is _AndroidDevice && lifetime.name == other.lifetime.name;
 
   /// Preserves the native hash rather than Dart object/reference identity.
   @override
-  int get hashCode => _java(native.hashCode$1);
+  int get hashCode => lifetime.nativeHash;
 
   @override
-  UsbConfiguration getConfiguration(int index) =>
-      _java(() => _AndroidConfiguration(native.getConfiguration(index)!));
+  UsbConfiguration getConfiguration(int index) => _java(
+    () => _AndroidConfiguration(native.getConfiguration(index)!, lifetime),
+  );
   @override
   int getConfigurationCount() => _java(() => native.configurationCount);
   @override
@@ -278,14 +427,14 @@ final class _AndroidDevice implements UsbDevice {
   @override
   int getDeviceId() => _java(() => native.deviceId);
   @override
-  String getDeviceName() => _java(() => _string(native.deviceName)!);
+  String getDeviceName() => lifetime.name;
   @override
   int getDeviceProtocol() => _java(() => native.deviceProtocol);
   @override
   int getDeviceSubclass() => _java(() => native.deviceSubclass);
   @override
   UsbInterface getInterface(int index) =>
-      _java(() => _AndroidInterface(native.getInterface(index)!));
+      _java(() => _AndroidInterface(native.getInterface(index)!, lifetime));
   @override
   int getInterfaceCount() => _java(() => native.interfaceCount);
   @override
@@ -296,7 +445,11 @@ final class _AndroidDevice implements UsbDevice {
   @override
   String? getProductName() => _java(() => _string(native.productName));
   @override
-  Future<String?> getSerialNumber() => _call(handle.serial, _resultString);
+  Future<String?> getSerialNumber() => _deviceCall(
+    lifetime,
+    (callback) => handle.serial(callback),
+    _resultString,
+  );
   @override
   int getVendorId() => _java(() => native.vendorId);
   @override
@@ -305,16 +458,21 @@ final class _AndroidDevice implements UsbDevice {
 
 /// Thin descriptor view; method contracts are inherited from [UsbConfiguration].
 final class _AndroidConfiguration implements UsbConfiguration {
-  /// Escaping framework configuration reference, managed by the native finalizer.
-  final j.UsbConfiguration native;
+  final DeviceLifetime lifetime;
+  final DeviceReference<j.UsbConfiguration> _reference;
+  j.UsbConfiguration get native => _reference.value;
 
-  /// Retains the supplied reference without copying descriptor values.
-  _AndroidConfiguration(this.native);
+  _AndroidConfiguration(j.UsbConfiguration native, this.lifetime)
+    : _reference = DeviceReference(
+        lifetime,
+        native,
+        (value) => value.release(),
+      );
   @override
   int getId() => _java(() => native.id);
   @override
   UsbInterface getInterface(int index) =>
-      _java(() => _AndroidInterface(native.getInterface(index)!));
+      _java(() => _AndroidInterface(native.getInterface(index)!, lifetime));
   @override
   int getInterfaceCount() => _java(() => native.interfaceCount);
   @override
@@ -329,16 +487,21 @@ final class _AndroidConfiguration implements UsbConfiguration {
 
 /// Thin descriptor view; method contracts are inherited from [UsbInterface].
 final class _AndroidInterface implements UsbInterface {
-  /// Original interface reference, passed directly to Android operations.
-  final j.UsbInterface native;
+  final DeviceLifetime lifetime;
+  final DeviceReference<j.UsbInterface> _reference;
+  j.UsbInterface get native => _reference.value;
 
-  /// Retains the supplied reference without copying descriptor values.
-  _AndroidInterface(this.native);
+  _AndroidInterface(j.UsbInterface native, this.lifetime)
+    : _reference = DeviceReference(
+        lifetime,
+        native,
+        (value) => value.release(),
+      );
   @override
   int getAlternateSetting() => _java(() => native.alternateSetting);
   @override
   UsbEndpoint getEndpoint(int index) =>
-      _java(() => _AndroidEndpoint(native.getEndpoint(index)!));
+      _java(() => _AndroidEndpoint(native.getEndpoint(index)!, lifetime));
   @override
   int getEndpointCount() => _java(() => native.endpointCount);
   @override
@@ -355,11 +518,15 @@ final class _AndroidInterface implements UsbInterface {
 
 /// Thin descriptor view; method contracts are inherited from [UsbEndpoint].
 final class _AndroidEndpoint implements UsbEndpoint {
-  /// Escaping framework endpoint reference, managed by the native finalizer.
-  final j.UsbEndpoint native;
+  final DeviceReference<j.UsbEndpoint> _reference;
+  j.UsbEndpoint get native => _reference.value;
 
-  /// Retains the supplied reference without copying descriptor values.
-  _AndroidEndpoint(this.native);
+  _AndroidEndpoint(j.UsbEndpoint native, DeviceLifetime lifetime)
+    : _reference = DeviceReference(
+        lifetime,
+        native,
+        (value) => value.release(),
+      );
   @override
   int getAddress() => _java(() => native.address);
   @override
@@ -381,11 +548,18 @@ final class _AndroidEndpoint implements UsbEndpoint {
 /// Supported method contracts are documented by [UsbDeviceConnection]. Releasing
 /// a JNI reference is not a substitute for explicitly awaiting [close].
 final class _AndroidConnection implements UsbDeviceConnection {
-  /// Java connection owner; not a raw file descriptor or descriptor snapshot.
-  final j.UsbHostProxy$Connection native;
+  final DeviceLifetime lifetime;
+  final DeviceConnectionReference<j.UsbHostProxy$Connection> _reference;
+  j.UsbHostProxy$Connection get native => _reference.value;
 
-  /// Retains the reference produced by casting a Java completion result.
-  _AndroidConnection(this.native);
+  /// Invalidation starts close; its completion releases the retained JNI handle.
+  _AndroidConnection(j.UsbHostProxy$Connection native, this.lifetime)
+    : _reference = DeviceConnectionReference(
+        lifetime,
+        native,
+        closeNative: (value) => _call(value.close, (_) {}),
+        release: (value) => value.release(),
+      );
 
   /// Requires an Android descriptor adapter, then forwards its native reference.
   j.UsbInterface _interface(UsbInterface intf) {
@@ -420,25 +594,33 @@ final class _AndroidConnection implements UsbDeviceConnection {
     }
   });
   @override
-  Future<String?> getSerial() => _call(native.serial, _resultString);
-  @override
-  Future<bool> claimInterface(UsbInterface intf, {bool force = false}) => _call(
-    (callback) => native.claim(_interface(intf), force, callback),
-    _boolean,
+  Future<String?> getSerial() => _deviceCall(
+    lifetime,
+    (callback) => native.serial(callback),
+    _resultString,
   );
   @override
-  Future<bool> releaseInterface(UsbInterface intf) => _call(
+  Future<bool> claimInterface(UsbInterface intf, {bool force = false}) =>
+      _deviceCall(
+        lifetime,
+        (callback) => native.claim(_interface(intf), force, callback),
+        _boolean,
+      );
+  @override
+  Future<bool> releaseInterface(UsbInterface intf) => _deviceCall(
+    lifetime,
     (callback) => native.release$1(_interface(intf), callback),
     _boolean,
   );
   @override
-  Future<bool> setInterface(UsbInterface intf) => _call(
+  Future<bool> setInterface(UsbInterface intf) => _deviceCall(
+    lifetime,
     (callback) => native.selectInterface(_interface(intf), callback),
     _boolean,
   );
   @override
   Future<bool> setConfiguration(UsbConfiguration configuration) =>
-      _call((callback) {
+      _deviceCall(lifetime, (callback) {
         if (configuration is! _AndroidConfiguration) {
           throw ArgumentError.value(
             configuration,
@@ -449,7 +631,7 @@ final class _AndroidConnection implements UsbDeviceConnection {
         native.selectConfiguration(configuration.native, callback);
       }, _boolean);
   @override
-  Future<void> close() => _call(native.close, (_) {});
+  Future<void> close() => _reference.close();
 
   // These existing API members are deliberately outside this implementation.
   @override

@@ -14,11 +14,13 @@ import android.os.BadParcelableException;
 import android.os.Build;
 import android.util.Log;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -89,26 +91,66 @@ public final class UsbHostProxy {
         void disposed();
     }
 
-    /** A framework device view owned by one engine; not a lease on a USB attachment. */
+    /**
+     * Shared validity of views obtained during one observed presence in Android's list.
+     * This is resource ownership, not a hardware identifier: Android names still define equality.
+     */
+    public static final class Lifetime {
+        /** Android name retained after native references have been cleared. */
+        public final String name;
+        /** Android UsbDevice hashes its name using Java String.hashCode(). */
+        public final int deviceHash;
+        private volatile boolean active = true;
+        /** Weak registrations do not retain every framework snapshot until detach. */
+        private final Set<Device> views = Collections.newSetFromMap(new WeakHashMap<>());
+
+        private Lifetime(String name) {
+            this.name = name;
+            this.deviceHash = name.hashCode();
+        }
+
+        /** Safe to read from Dart before the asynchronous detach callback arrives. */
+        public boolean isAlive() { return active; }
+
+        /** Caller holds the owning session monitor; admitted native calls keep local references. */
+        private void end() {
+            active = false;
+            for (Device view : views) view.usbDevice = null;
+            views.clear();
+        }
+    }
+
+    /** Framework view whose native reference ends with the observed device presence. */
     public static final class Device {
-        /** Original immutable framework descriptor reference. */
-        public final UsbDevice usbDevice;
+        /** Session-guarded framework descriptor; cleared on detach or session disposal. */
+        UsbDevice usbDevice;
+        /** Shared invalidation flag and immutable name/hash; contains no USB handles. */
+        public final Lifetime lifetime;
         /** Session used for dispatch and engine-lifecycle checks. */
         private final Session owner;
         /** Notification delivered, or consumed silently as initial Activity state; session-guarded. */
         private boolean attachNotified = false;
 
-        /** Retains a framework object without adding an attachment identifier. */
-        private Device(Session owner, UsbDevice device) {
+        private Device(Session owner, UsbDevice device, Lifetime lifetime) {
             this.owner = owner;
             this.usbDevice = device;
+            this.lifetime = lifetime;
+            lifetime.views.add(this);
         }
 
-        /** Reads the supplied framework object's serial after checking its owning session. */
+        /** Returns a live descriptor; Dart owns the returned JNI reference until invalidation. */
+        public UsbDevice descriptor() {
+            synchronized (owner) {
+                owner.checkDevice(this);
+                return usbDevice;
+            }
+        }
+
+        /** Reads serial on a worker, retaining a local reference only for the admitted call. */
         public void serial(Completion completion) {
             owner.work(completion, () -> {
-                synchronized (owner) { owner.checkDevice(this); }
-                return usbDevice.getSerialNumber();
+                UsbDevice descriptor = descriptor();
+                return descriptor.getSerialNumber();
             });
         }
     }
@@ -169,7 +211,8 @@ public final class UsbHostProxy {
                     try {
                         UsbDevice reply = extraDevice(intent);
                         boolean granted = reply != null
-                            && reply.getDeviceName().equals(pending.device.usbDevice.getDeviceName())
+                            && pending.device.lifetime.isAlive()
+                            && reply.getDeviceName().equals(pending.device.lifetime.name)
                             && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
                             && manager.hasPermission(pending.device.usbDevice);
                         pending.finish(granted, null);
@@ -216,10 +259,11 @@ public final class UsbHostProxy {
             if (!active) throw new IllegalStateException("USB session has ended");
         }
 
-        /** Checks engine ownership only; Android decides device presence and access. */
+        /** Rejects ended views even if Android later reuses their name. */
         private void checkDevice(Device device) {
             checkActive();
             if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
+            if (!device.lifetime.isAlive()) throw new IllegalStateException("USB device is detached");
         }
 
         /** Keeps the latest framework view and the name's notification flag; requires the monitor. */
@@ -228,7 +272,8 @@ public final class UsbHostProxy {
             Device previous = devices.get(name);
             // Reusing a view saves an allocation; it does not validate an attachment.
             if (previous != null && previous.usbDevice == usbDevice) return previous;
-            Device device = new Device(this, usbDevice);
+            Lifetime lifetime = previous == null ? new Lifetime(name) : previous.lifetime;
+            Device device = new Device(this, usbDevice, lifetime);
             device.attachNotified = previous != null && previous.attachNotified;
             devices.put(name, device);
             return device;
@@ -242,11 +287,10 @@ public final class UsbHostProxy {
         public synchronized Device[] deviceList() {
             checkActive();
             Map<String, UsbDevice> found = manager.getDeviceList();
-            // A saved device view can open/request permission before rediscovery.
-            // Reconcile resources too, rather than relying on the event registry.
+            // Reconcile resource owners as well as the latest descriptor views.
             Set<String> missing = new HashSet<>(devices.keySet());
             for (Connection connection : connections) missing.add(connection.deviceName);
-            for (Permission permission : permissions.values()) missing.add(permission.device.usbDevice.getDeviceName());
+            for (Permission permission : permissions.values()) missing.add(permission.device.lifetime.name);
             for (Call call : calls) if (call.openingName != null) missing.add(call.openingName);
             missing.removeAll(found.keySet());
             for (String name : missing) removeDevice(name);
@@ -272,7 +316,7 @@ public final class UsbHostProxy {
                 checkDevice(device);
                 if (manager.hasPermission(device.usbDevice)) { call.finish(true, null); return; }
                 for (Permission permission : permissions.values()) {
-                    if (permission.device.usbDevice.getDeviceName().equals(device.usbDevice.getDeviceName())) {
+                    if (permission.device.lifetime == device.lifetime) {
                         permission.waiters.add(call);
                         return;
                     }
@@ -286,11 +330,13 @@ public final class UsbHostProxy {
                 Permission permission = new Permission(device, pendingIntent, call);
                 permissions.put(request, permission);
                 workers.execute(() -> {
+                    UsbDevice descriptor;
                     synchronized (Session.this) {
                         if (!active || permissions.get(request) != permission) return;
+                        descriptor = device.usbDevice;
                     }
                     try {
-                        manager.requestPermission(device.usbDevice, pendingIntent);
+                        manager.requestPermission(descriptor, pendingIntent);
                     } catch (Throwable error) {
                         synchronized (Session.this) {
                             if (permissions.remove(request, permission)) permission.finish(null, error);
@@ -311,24 +357,27 @@ public final class UsbHostProxy {
             Call call = new Call(this, completion);
             try {
                 checkDevice(device);
-                call.openingName = device.usbDevice.getDeviceName();
+                call.openingName = device.lifetime.name;
                 workers.execute(() -> {
                     UsbDeviceConnection opened;
                     try {
+                        UsbDevice descriptor;
                         synchronized (Session.this) {
                             if (call.completion == null) return;
                             if (call.openingName == null) {
                                 call.finish(null, new IllegalStateException("USB device detached while opening"));
                                 return;
                             }
+                            checkDevice(device);
+                            descriptor = device.usbDevice;
                         }
-                        opened = manager.openDevice(device.usbDevice);
+                        opened = manager.openDevice(descriptor);
                     } catch (Throwable error) { call.finish(null, error); return; }
                     synchronized (Session.this) {
                         // The native open may have completed after detach or session shutdown.
-                        if (call.completion != null && call.openingName != null) {
+                        if (call.completion != null && call.openingName != null && device.lifetime.isAlive()) {
                             if (opened == null) { call.finish(null, null); return; }
-                            Connection connection = new Connection(this, call.openingName, opened);
+                            Connection connection = new Connection(this, device.lifetime, opened);
                             connections.add(connection);
                             call.finish(connection, null);
                             return;
@@ -412,12 +461,14 @@ public final class UsbHostProxy {
          * Removes a known name, resolves its permissions false and schedules its closes.
          * Pending opens are invalidated so late native results cannot escape cleanup.
          * Requires the session monitor. Only a known name emits an event; cleanup
-         * also covers opens/connections created before discovery. Removal is idempotent.
+         * ends all snapshots before notification. Removal is idempotent.
          */
         private void removeDevice(String name) {
             Device device = devices.remove(name);
+            if (device != null) device.lifetime.end();
             for (Map.Entry<Integer, Permission> entry : new ArrayList<>(permissions.entrySet())) {
-                if (entry.getValue().device.usbDevice.getDeviceName().equals(name)) {
+                if (entry.getValue().device.lifetime.name.equals(name)) {
+                    entry.getValue().device.lifetime.end();
                     permissions.remove(entry.getKey());
                     entry.getValue().finish(false, null);
                 }
@@ -426,7 +477,10 @@ public final class UsbHostProxy {
                 if (name.equals(call.openingName)) call.openingName = null;
             }
             for (Connection connection : new ArrayList<>(connections)) {
-                if (connection.deviceName.equals(name)) connection.close(null);
+                if (connection.deviceName.equals(name)) {
+                    connection.deviceLifetime.end();
+                    connection.close(null);
+                }
             }
             if (device != null && events != null) {
                 try { events.detached(device); }
@@ -441,6 +495,7 @@ public final class UsbHostProxy {
         private synchronized void dispose() {
             if (!active) return;
             active = false;
+            for (Device device : devices.values()) device.lifetime.end();
             context.unregisterReceiver(usbReceiver);
             context.unregisterReceiver(permissionReceiver);
             for (Permission permission : permissions.values()) permission.finish(null, new IllegalStateException("USB session has ended"));
@@ -535,6 +590,8 @@ public final class UsbHostProxy {
     public static final class Connection {
         /** Session responsible for tracking this connection and its callbacks. */
         private final Session owner;
+        /** Shared device validity; close remains available after it ends. */
+        private final Lifetime deviceLifetime;
         /** Name used to close this particular native connection when Android reports detach. */
         private final String deviceName;
         /** Shared native access for operations; exclusive access for native close. */
@@ -549,15 +606,16 @@ public final class UsbHostProxy {
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
 
         /** Takes ownership of a successfully opened native connection. */
-        private Connection(Session owner, String deviceName, UsbDeviceConnection connection) {
+        private Connection(Session owner, Lifetime lifetime, UsbDeviceConnection connection) {
             this.owner = owner;
-            this.deviceName = deviceName;
+            this.deviceLifetime = lifetime;
+            this.deviceName = lifetime.name;
             this.connection = connection;
         }
 
         /** Rejects access after close scheduling, including before taking a native lock. */
         private void checkOpen() {
-            if (closing) throw new IllegalStateException("USB connection is closed or detached");
+            if (closing || !deviceLifetime.isAlive()) throw new IllegalStateException("USB connection is closed or detached");
         }
 
         /** Returns the native descriptor without transferring ownership of it to the caller. */
@@ -664,6 +722,7 @@ public final class UsbHostProxy {
                     synchronized (owner) {
                         closed = true;
                         owner.connections.remove(this);
+                        if (error != null) Log.w("UsbHostProxy", "USB connection close failed", error);
                         for (Call waiter : closeWaiters) waiter.finish(null, error);
                         closeWaiters.clear();
                     }

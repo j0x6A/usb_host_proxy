@@ -6,16 +6,19 @@ import 'usb_interface.dart';
 
 /// Android USB device API, excluding Parcelable serialization.
 ///
-/// Android adapters retain original descriptor references. Descriptor getters
-/// remain readable after detach. An older view is still accepted by its active
-/// session: Android decides presence, permissions and operation results. A name
-/// or platform ID is not a persistent hardware identity and may be reused.
+/// Android adapters retain original descriptor references while the device is
+/// present. Observed detach/absence or session termination invalidates every
+/// view and its configuration/interface/endpoint objects, releasing their JNI
+/// references. Subsequent descriptor access fails with [StateError]. Only
+/// [getDeviceName], equality and hashCode remain available without JNI.
+/// A name or platform ID is not a persistent hardware identity and may be reused.
 ///
-/// Android adapters delegate equality and hashing to the native UsbDevice:
+/// Android adapters preserve Android's name-based equality and Java name hash:
 /// adapters with the same Android name compare equal and have the same native
-/// hash, including after name reuse or across sessions. Closed connections are
-/// never revived by equality or name reuse. Equality is between Android adapters,
-/// not between a device and its name string or a custom Dart implementation.
+/// hash, including after name reuse or across sessions. Closed connections and
+/// invalidated device views are never revived by equality or name reuse.
+/// Equality is between Android adapters, not between a device and its name
+/// string or a custom Dart implementation.
 abstract class UsbDevice {
   /// Returns a configuration by descriptor index.
   ///
@@ -35,6 +38,7 @@ abstract class UsbDevice {
   /// Returns the platform device name used as the device-list key.
   ///
   /// Android returns its original name without any plugin-specific suffix.
+  /// The immutable name remains available after invalidation, without JNI.
   String getDeviceName();
 
   /// Returns bDeviceProtocol.
@@ -63,7 +67,8 @@ abstract class UsbDevice {
   /// Returns the serial number, if available.
   ///
   /// Android reads the supplied framework object's serial on a worker after
-  /// checking session ownership. This does not refresh the descriptor by name.
+  /// checking session ownership and device validity. This does not refresh the
+  /// descriptor by name. A late result for an invalidated device is rejected.
   /// USB permission may be required; failures remain errors, not synthetic null.
   Future<String?> getSerialNumber();
 

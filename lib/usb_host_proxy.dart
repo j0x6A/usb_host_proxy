@@ -10,6 +10,11 @@
 /// getters and FD/raw reads still call JNI synchronously. Events use streams;
 /// requestPermission returns the decision instead of exposing a PendingIntent.
 ///
+/// Observed device removal invalidates all related descriptor views and starts
+/// connection cleanup. Only a removed device's name, equality and hash remain
+/// available without JNI. The manager and event receivers stay active until
+/// the engine session ends, including while the device list is empty.
+///
 /// Java overloads share one Dart method with named optional arguments. Static
 /// UsbDevice name/ID conversions use getDeviceIdFromName/getDeviceNameFromId
 /// because their Android names are already used by instance methods in Dart.

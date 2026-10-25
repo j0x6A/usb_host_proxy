@@ -4,6 +4,8 @@ import 'usb_interface.dart';
 ///
 /// This is descriptor information, not the connection's selected configuration.
 /// The Dart adapter reads the original Android object through JNI.
+/// Device removal or session termination releases that reference; subsequent
+/// reads fail with [StateError], including reads through saved child objects.
 abstract class UsbConfiguration {
   /// Returns bConfigurationValue, not the configuration's list index.
   int getId();

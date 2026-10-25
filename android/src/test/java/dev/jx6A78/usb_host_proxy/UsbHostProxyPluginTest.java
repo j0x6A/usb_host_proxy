@@ -246,7 +246,7 @@ public class UsbHostProxyPluginTest {
         plugin.onDetachedFromActivityForConfigChanges();
         plugin.onReattachedToActivityForConfigChanges(activityBinding(usbIntent()));
         assertEquals(0, session.deviceList().length);
-        assertFalse(session.hasPermission(device));
+        assertThrows(IllegalStateException.class, () -> session.hasPermission(device));
         verify(events).detached(device);
         verifyNoMoreInteractions(events);
     }

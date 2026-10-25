@@ -146,10 +146,12 @@ observing its detach/absence, or disposing the screen clears its UI ownership
 and attempts native close. Late open results are closed, never adopted by a new
 selection. Selection, discovery and permission-check versions discard obsolete
 results; original public device/interface references are passed to the plugin.
-Names are Android list keys. The plugin adds no device UUID or generation check;
-it follows Android detach events and closes connections by name. The screen
-retains its selected descriptor view until selection changes; it does not mutate
-previously obtained descriptors merely because a later scan returns a new view.
+Names are Android list keys. The plugin adds no device UUID. Observed removal
+invalidates saved device/descriptor views and starts connection cleanup. Only
+the old device's name, equality and hash remain available, without JNI handles;
+reconnecting under the same name does not revive those views. The screen clears
+its selection on detach. While the device remains present, a new enumeration
+does not update fields of previously obtained descriptor views.
 
 One user operation runs at a time; cleanup also blocks new USB operations until
 it finishes. Discovery and device selection remain available. A pending permission
@@ -214,15 +216,18 @@ text content never determines the category.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor forwarding, parallel execution and lifecycle independently of the UI.
-Those Java tests cover saved device views after detach, name-based permission coalescing,
+Those Java tests cover invalidation of saved views after detach, name-based permission coalescing,
 session-isolated replies and cleanup of opens invalidated by detach/restart,
-including connections opened before rediscovery. No device UUID is involved.
+including rejection of stale views after reconnection. No device UUID is involved.
 They also check device/connection serial values and errors, native FD/raw
 descriptor results, rejection after close and permission submission failures.
 Blocked direct FD/raw reads verify that native close waits for their return
 while later reads are rejected. This does not add any operation to the UI.
 This does not cover JNI conversion or native USB behavior. Library features
 without screen controls require a separate caller for manual verification.
+`test/device_lifetime_test.dart` checks the production resource-ownership helpers
+without JNI: cascading invalidation, reference release, cleanup failures, native
+close completion, repeated close and independent lifetimes for reused names.
 `test/usb_request_test.dart` separately checks the withdrawn transport's public
 UsbRequest placeholders: null/false/no-op results, no native calls and no buffer
 reads or writes. It does not test a working transport implementation.
@@ -259,3 +264,18 @@ default, cold/warm USB launches, duplicate Intent/broadcast delivery, force clai
 with a kernel-owned interface and release failures. Device class policy may require
 application-level permissions (for example CAMERA for video devices); the example
 does not request those automatically. See the [plugin README](../README.md) for API contracts.
+
+For device-removal cleanup, also verify with a small caller using the public API:
+
+1. Retain a device, configuration, interface and endpoint, then unplug or disable
+   the device's USB port. Their descriptor getters must fail with `StateError`.
+2. The removed device's name, equality and hash must remain usable. Its detach
+   payload must allow reading the name without accessing any other descriptor.
+3. Repeat without subscribing to device streams. Enumeration must return an
+   empty map, the saved objects must be invalid and repeated close must be safe.
+4. Reconnect and enumerate a new device view. The old views must stay invalid,
+   even if Android reuses the name; the manager must remain usable throughout.
+
+These checks exercise the JNI boundary that the fake-backed widget tests and
+ownership-helper tests do not run. A detach event marks the start of cleanup;
+native close can finish later, after already-admitted native calls return.

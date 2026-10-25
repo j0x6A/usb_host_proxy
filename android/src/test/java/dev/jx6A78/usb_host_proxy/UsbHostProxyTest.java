@@ -49,7 +49,7 @@ public class UsbHostProxyTest {
     private UsbDeviceConnection nativeConnection;
     /** Engine 42's backend session, replaced only in lifecycle-specific tests. */
     private UsbHostProxy.Session session;
-    /** Initial framework view; retained to test name-based operations after detach. */
+    /** Initial framework view; retained to check that detach permanently invalidates it. */
     private UsbHostProxy.Device device;
     /** Simulated live discovery list; broadcasting alone does not change presence. */
     private HashMap<String, UsbDevice> attachedDevices;
@@ -176,6 +176,52 @@ public class UsbHostProxyTest {
         verifyNoMoreInteractions(events);
     }
 
+    @Test public void detachClearsEverySnapshotBeforeNotifyingAndKeepsOnlyNameAndHash() {
+        UsbDevice snapshot = sameNameDevice();
+        UsbHostProxy.Device refreshed = session.deviceList()[0];
+        assertSame(device.lifetime, refreshed.lifetime);
+        assertSame(usb, device.descriptor());
+        assertSame(snapshot, refreshed.descriptor());
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        doAnswer(call -> {
+            assertFalse(device.lifetime.isAlive());
+            assertNull(device.usbDevice);
+            assertNull(refreshed.usbDevice);
+            assertThrows(IllegalStateException.class, device::descriptor);
+            assertThrows(IllegalStateException.class, refreshed::descriptor);
+            return null;
+        }).when(events).detached(refreshed);
+        session.listen(events);
+        detachDevice();
+        verify(events).detached(refreshed);
+        assertEquals(usb.getDeviceName(), device.lifetime.name);
+        assertEquals(usb.getDeviceName().hashCode(), device.lifetime.deviceHash);
+        assertEquals(0, session.deviceList().length);
+        attachedDevices.put(usb.getDeviceName(), usb);
+        UsbHostProxy.Device replacement = session.deviceList()[0];
+        assertNotSame(device.lifetime, replacement.lifetime);
+        assertTrue(replacement.lifetime.isAlive());
+        assertEquals(device.lifetime.name, replacement.lifetime.name);
+        assertEquals(device.lifetime.deviceHash, replacement.lifetime.deviceHash);
+        assertThrows(IllegalStateException.class, device::descriptor);
+    }
+
+    @Test public void absenceAndSessionShutdownInvalidateViewsWithoutAnEventListener() {
+        sameNameDevice();
+        UsbHostProxy.Device refreshed = session.deviceList()[0];
+        attachedDevices.clear();
+        assertEquals(0, session.deviceList().length);
+        assertFalse(device.lifetime.isAlive());
+        assertNull(device.usbDevice);
+        assertNull(refreshed.usbDevice);
+        sameNameDevice();
+        UsbHostProxy.Device replacement = session.deviceList()[0];
+        UsbHostProxy.detach(42);
+        assertFalse(replacement.lifetime.isAlive());
+        assertNull(replacement.usbDevice);
+        assertThrows(IllegalStateException.class, replacement::descriptor);
+    }
+
     @Test public void secondListenerIsRejectedWithoutReplacingTheOriginal() {
         UsbHostProxy.Events first = mock(UsbHostProxy.Events.class);
         UsbHostProxy.Events second = mock(UsbHostProxy.Events.class);
@@ -206,7 +252,8 @@ public class UsbHostProxyTest {
         attachedDevices.put(usb.getDeviceName(), usb);
         UsbHostProxy.Device replacement = session.deviceList()[0];
         assertNotSame(device, replacement);
-        assertEquals(device.usbDevice.getDeviceName(), replacement.usbDevice.getDeviceName());
+        assertEquals(device.lifetime.name, replacement.lifetime.name);
+        assertNotSame(device.lifetime, replacement.lifetime);
         verifyNoMoreInteractions(events);
     }
 
@@ -217,7 +264,7 @@ public class UsbHostProxyTest {
         broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED, usb);
         broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED, usb);
         assertEquals(0, session.deviceList().length);
-        assertFalse(session.hasPermission(device));
+        assertThrows(IllegalStateException.class, () -> session.hasPermission(device));
         verify(events).detached(device);
         verifyNoMoreInteractions(events);
     }
@@ -301,26 +348,31 @@ public class UsbHostProxyTest {
         assertTrue(serial.await().error instanceof IllegalStateException);
     }
 
-    @Test public void olderDeviceViewIsForwardedAfterReattachButItsConnectionStaysClosed() throws Exception {
+    @Test public void olderDeviceViewAndConnectionStayInvalidAfterReattach() throws Exception {
         UsbHostProxy.Connection connection = open();
         detachDevice();
-        assertFalse(session.hasPermission(device));
+        assertThrows(IllegalStateException.class, () -> session.hasPermission(device));
         assertThrows(IllegalStateException.class, connection::rawDescriptors);
         sameNameDevice();
         UsbHostProxy.Device replacement = session.deviceList()[0];
         assertNotSame(device, replacement);
         UsbDeviceConnection reopened = mock(UsbDeviceConnection.class);
-        when(manager.openDevice(usb)).thenReturn(reopened);
-        when(manager.hasPermission(usb)).thenReturn(true);
+        when(manager.openDevice(replacement.usbDevice)).thenReturn(reopened);
+        when(manager.hasPermission(replacement.usbDevice)).thenReturn(true);
         when(reopened.getFileDescriptor()).thenReturn(24);
-        assertTrue(session.hasPermission(device));
+        assertThrows(IllegalStateException.class, () -> session.hasPermission(device));
+        Result stale = new Result();
+        session.open(device, stale);
+        assertTrue(stale.await().error instanceof IllegalStateException);
+        assertTrue(session.hasPermission(replacement));
         Result opened = new Result();
-        session.open(device, opened);
+        session.open(replacement, opened);
         assertNull(opened.await().error);
         UsbHostProxy.Connection current = (UsbHostProxy.Connection) opened.value;
         assertEquals(24, current.fileDescriptor());
         assertThrows(IllegalStateException.class, connection::fileDescriptor);
-        verify(manager, times(2)).openDevice(usb);
+        verify(manager, times(1)).openDevice(usb);
+        verify(manager).openDevice(replacement.usbDevice);
         Result cleanup = new Result();
         connection.close(cleanup);
         cleanup.await();
@@ -506,7 +558,7 @@ public class UsbHostProxyTest {
         assertNull(missing.value);
     }
 
-    @Test public void deviceSerialPreservesNativeResultsAfterDetachAndRejectsEndedSessions() throws Exception {
+    @Test public void deviceSerialPreservesNativeResultsButRejectsDetachAndEndedSessions() throws Exception {
         SecurityException denial = new SecurityException("serial denied");
         when(usb.getSerialNumber()).thenReturn("device serial").thenReturn(null).thenThrow(denial);
         Result serial = new Result();
@@ -524,13 +576,13 @@ public class UsbHostProxyTest {
         doReturn("native after detach").when(usb).getSerialNumber();
         Result detached = new Result();
         device.serial(detached);
-        assertEquals("native after detach", detached.await().value);
-        verify(usb, times(4)).getSerialNumber();
+        assertTrue(detached.await().error instanceof IllegalStateException);
+        verify(usb, times(3)).getSerialNumber();
         UsbHostProxy.detach(42);
         Result ended = new Result();
         device.serial(ended);
         assertTrue(ended.await().error instanceof IllegalStateException);
-        verify(usb, times(4)).getSerialNumber();
+        verify(usb, times(3)).getSerialNumber();
     }
 
     @Test public void connectionSerialPreservesNativeValuesAndFailures() throws Exception {
@@ -624,7 +676,7 @@ public class UsbHostProxyTest {
         verify(nativeConnection, times(1)).close();
     }
 
-    @Test public void authorizedDeviceViewsAreForwardedEvenAfterDetachWithoutAnExtraDialog() throws Exception {
+    @Test public void authorizedDeviceViewsAreRejectedAfterDetachWithoutAnExtraDialog() throws Exception {
         when(manager.hasPermission(usb)).thenReturn(true);
         Result authorized = new Result();
         session.requestPermission(device, authorized);
@@ -633,8 +685,8 @@ public class UsbHostProxyTest {
         detachDevice();
         Result detached = new Result();
         session.requestPermission(device, detached);
-        assertEquals(true, detached.await().value);
-        assertNull(detached.error);
+        assertTrue(detached.await().error instanceof IllegalStateException);
+        verify(manager, times(1)).hasPermission(usb);
         verify(manager, never()).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
     }
 
@@ -722,40 +774,55 @@ public class UsbHostProxyTest {
         verify(nativeConnection, times(1)).close();
     }
 
-    @Test public void detachCancelsUnstartedOpenButDoesNotBlacklistTheSavedDeviceView() throws Exception {
+    @Test public void detachCancelsUnstartedOpenAndPermanentlyInvalidatesItsDeviceView() throws Exception {
         LinkedBlockingQueue<Runnable> workers = holdWorkers();
         Result cancelled = new Result();
         session.open(device, cancelled);
         detachDevice();
         sameNameDevice();
-        Result opened = new Result();
-        session.open(device, opened);
+        Result stale = new Result();
+        session.open(device, stale);
+        assertTrue(stale.await().error instanceof IllegalStateException);
         workers.remove().run();
         assertTrue(cancelled.await().error instanceof IllegalStateException);
         verify(manager, never()).openDevice(any(UsbDevice.class));
+
+        UsbHostProxy.Device replacement = session.deviceList()[0];
+        UsbDeviceConnection replacementNative = mock(UsbDeviceConnection.class);
+        when(manager.openDevice(replacement.usbDevice)).thenReturn(replacementNative);
+        Result opened = new Result();
+        session.open(replacement, opened);
         workers.remove().run();
         assertNull(opened.await().error);
-        verify(manager, times(1)).openDevice(usb);
+        verify(manager).openDevice(replacement.usbDevice);
         Result closed = new Result();
         ((UsbHostProxy.Connection) opened.value).close(closed);
         workers.remove().run();
         assertNull(closed.await().error);
-        verify(nativeConnection).close();
+        verify(replacementNative).close();
 
-        // Enumeration also invalidates an open whose name was never rediscovered.
+        // Enumeration invalidates a pending open even without a detach broadcast.
         Result unseen = new Result();
-        session.open(device, unseen);
+        session.open(replacement, unseen);
         attachedDevices.clear();
         assertEquals(0, session.deviceList().length);
         workers.remove().run();
         assertTrue(unseen.await().error instanceof IllegalStateException);
-        verify(manager, times(1)).openDevice(usb);
+        verify(manager, times(1)).openDevice(any(UsbDevice.class));
     }
 
-    @Test public void savedViewConnectionsBeforeRediscoveryAreClosedByEnumerationAndSessionEnd() throws Exception {
+    @Test public void emptySessionRemainsUsableButSavedViewsCannotOpenAReconnectedDevice() throws Exception {
         detachDevice();
-        sameNameDevice();
-        UsbHostProxy.Connection first = open(); // No enumeration or attach delivery yet.
+        assertEquals(0, session.deviceList().length);
+        UsbDevice replacementUsb = sameNameDevice();
+        Result stale = new Result();
+        session.open(device, stale);
+        assertTrue(stale.await().error instanceof IllegalStateException);
+        verify(manager, never()).openDevice(any(UsbDevice.class));
+
+        device = session.deviceList()[0];
+        when(manager.openDevice(replacementUsb)).thenReturn(nativeConnection);
+        UsbHostProxy.Connection first = open();
         attachedDevices.clear();
         assertEquals(0, session.deviceList().length);
         assertThrows(IllegalStateException.class, first::fileDescriptor);
@@ -764,9 +831,10 @@ public class UsbHostProxyTest {
         assertNull(firstClosed.await().error);
         verify(nativeConnection).close();
 
-        sameNameDevice();
+        replacementUsb = sameNameDevice();
+        device = session.deviceList()[0];
         UsbDeviceConnection otherNative = mock(UsbDeviceConnection.class);
-        when(manager.openDevice(usb)).thenReturn(otherNative);
+        when(manager.openDevice(replacementUsb)).thenReturn(otherNative);
         UsbHostProxy.Connection second = open();
         UsbHostProxy.detach(42);
         Result secondClosed = new Result();

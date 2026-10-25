@@ -126,16 +126,18 @@ necessarily configuration values, interface IDs or endpoint addresses.
 `getConfiguration(i).getInterface(j)` when walking a particular configuration.
 
 Device identity follows Android's `deviceName`, with no private device UUID or
-generation number. Android device adapters use native equality/hashing, so views
-with the same name compare equal. Names may be reused after disconnection and
+generation number. Android device adapters preserve Android equality/hashing,
+so views with the same name compare equal. Names may be reused after disconnection and
 are not permanent hardware identifiers. Comparisons to strings or custom Dart
 device implementations return false.
 
-Older views from the same active session remain valid inputs; Android decides
-presence and access. Their descriptor fields do not update automatically by
-name: enumerate again for current views. Objects from another engine or
-implementation are rejected. Equality does not bypass this check or revive a
-closed connection.
+Views remain valid while that device stays in Android's observed list. Detach,
+observed absence or engine shutdown permanently invalidates every saved device,
+configuration, interface and endpoint view. Their JNI references are released;
+implemented reads/operations then fail with `StateError`. Only the immutable
+device name, equality and Android-compatible hash remain usable without JNI.
+Enumerate again for a new view after reconnecting. Equal names/hashes do not
+revive an old object. Objects from another engine or implementation are rejected.
 
 ## Operation results and close
 
@@ -178,9 +180,22 @@ attach event. Enumeration alone does not synthesize attach.
 
 Android detach is authoritative: it closes connections and cancels pending
 permission/open work for that name, even if the latest list contains it again.
+`deviceDetached` means invalidation and the start of cleanup, not that native
+close has finished. Its payload has no JNI handles; use `getDeviceName()` for
+identification. Cleanup runs without stream subscribers. The manager and system
+event receivers remain active even when no devices are present.
+
 A late native open result is closed before reporting the failed open. Session
 shutdown fails pending calls immediately and still cleans late results. Name
 reuse never revives a closed connection or cancelled operation.
+
+Already-admitted native calls retain local references until they return; close
+uses the existing connection lifetime lock before releasing native resources.
+The library releases references it owns; Android or the application may retain
+their own descriptor snapshots. It cannot erase caller-held Dart variables or
+copies of raw descriptor bytes/FD integers. Old wrappers are inert, and a copied
+FD no longer grants valid use after close. If no system event is received,
+absence is detected by the next enumeration; no polling mechanism is added.
 
 The plugin follows Android's events. Without additional Android information it
 cannot distinguish an old delayed detach from a new detach for the same reused
@@ -239,7 +254,8 @@ and [Activity launch modes](https://developer.android.com/guide/topics/manifest/
 | Discovery/events | Java tests cover views, name reuse, missing devices, deduplication, Activity intents and lifecycle. | Real list keys, callbacks and USB chooser behavior. |
 | Permissions | Java tests cover coalescing, grant/refusal, old views, late replies, session isolation and errors. | System dialogs, device-class permissions and OEM behavior. |
 | Connections/management | Java tests cover native results/errors, concurrent calls, close exclusion, late opens and cleanup. | Actual kernel/device behavior, settings and resource teardown. |
-| Descriptor getters/equality | Adapters call Android methods; widget tests use fake descriptors. | JNI values, equality/hash, name/ID conversion and reference lifetime. |
+| Descriptor getters/equality | Getters read JNI; name/hash survive invalidation. Widget tests use fake descriptors. | JNI values, equality/hash and name/ID conversion. |
+| Resource ownership | Java tests check shared invalidation; Dart helper tests check cascading release, close completion and errors without JNI. | Actual JNI reference deletion and cleanup on a device. |
 | Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
 | Request placeholders | Tests check null/false/no-op results without native/buffer access. | Transport is not implemented or verified. |
 
@@ -248,6 +264,12 @@ Widget tests use fake public interfaces. Neither suite executes Dart-to-JNI USB
 integration. There is no full branch/API-coverage measurement or automated
 physical-device suite; passing tests do not establish complete hardware support
 or JNI ownership/error-conversion correctness.
+
+In particular, automated tests do not exercise every descriptor getter through
+JNI, the real permission dialog, native name/ID conversion or physical unplug
+during a native call. The ownership-helper tests check release callbacks, not
+the JVM's actual reference deletion. These are verification gaps, not additional
+implemented features. Use the example's manual checklist on Android hardware.
 
 With dependencies and tooling already installed, run:
 

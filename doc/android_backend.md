@@ -11,6 +11,7 @@ its implemented scope.
 | --- | --- |
 | `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Exported classes, contracts, descriptor meanings, constants and placeholders. |
 | `lib/src/android/android_usb.dart` | JNI references, Java-to-Dart errors, completion-to-Future conversion and event streams. |
+| `lib/src/android/device_lifetime.dart` | Shared invalidation, weak resource registrations and exactly-once reference release; testable without JNI. |
 | `lib/src/android/bindings.g.dart` | Generated Java bindings; do not edit by hand. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxy.java` | Sessions, discovery, permissions, workers and native connection lifetime. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxyPlugin.java` | Flutter Engine/Activity callbacks and intent-listener registration. |
@@ -19,10 +20,11 @@ its implemented scope.
 | `example/lib/main.dart`, `example/test` | Diagnostic screen and fake-backed widget/placeholder tests. |
 
 For a descriptor read, follow `UsbDevice.getProductName()` to `_AndroidDevice`
-and the generated getter. It reads the original Android object directly, without
-a worker or an open connection.
+and the generated getter. The shared lifetime is checked first; the getter then
+reads the original Android object directly, without a worker or open connection.
 
-For management, follow `claimInterface()` through `_AndroidConnection`, `_call`,
+For management, follow `claimInterface()` through `_AndroidConnection`,
+`_deviceCall` and `_call`,
 Java `Connection.claim()` and `Connection.submit()`. A worker calls Android;
 `Completion` delivers the result/error and `_call` completes the Dart Future.
 `openDevice()` has a separate path because a late result may need cleanup before
@@ -33,7 +35,8 @@ it can be given to Dart.
 | Object | What it retains | How its lifetime ends |
 | --- | --- | --- |
 | `Session` | Application context, receivers, workers, pending work and connections for one engine. | Engine restart/shutdown ends it permanently. |
-| `Device` | A native descriptor and owning session. Its notification flag deduplicates events only. | Detach does not blacklist the view. Operations require an active owning session, then follow Android's result. |
+| `Device` | A native descriptor, owning session and shared `Lifetime`. Its notification flag deduplicates events. | Detach/observed absence/session end clears all snapshots' descriptors and permanently invalidates them. |
+| `Lifetime` | Immutable Android name/hash, an active flag and weak device-view registrations. | Ends before removal notification; it retains no USB descriptor after invalidation. |
 | `Connection` | One native connection; its name matches detach cleanup. | Close/detach/session end permanently blocks new native access. |
 | `Permission` | A PendingIntent and callers awaiting the same device-name decision. | Reply, detach or session end settles callers and cancels the PendingIntent. |
 | `Call` | A callback that a worker or cleanup may finish, at most once. | The callback is cleared before delivery, so late workers cannot deliver again. |
@@ -42,11 +45,15 @@ There is no private device identifier. The `devices` map keeps the latest
 observed framework view and notification flag by name. `remember()` reuses a
 wrapper if it holds the same Java reference; this saves an allocation and never
 decides validity. New framework views inherit the name's notification flag
-without mutating old views.
+without updating old descriptor fields. Those views share a `Lifetime` that
+represents ownership of resources during observed presence, not a hardware ID.
+An observed removal ends it permanently; a later presence starts a new owner,
+even if Android reuses the same name. Equality/hashing still follow Android's
+name rules and do not authorize access through an invalidated view.
 
-Resources can exist before rediscovery. Enumeration therefore checks names from
-connections, permissions and pending opens as well as the event registry. Session
-disposal closes every owned connection, independently of that registry.
+Enumeration checks names from connections, permissions and pending opens as well
+as the event registry. Session disposal closes every owned connection. Removing
+the last device does not dispose the session, manager, workers or receivers.
 
 ## Permission replies and open attempts
 
@@ -55,8 +62,14 @@ pending decisions. A unique permission-action UUID separates callback routes
 between sessions; it is not a USB identity. A reply must match the route/request,
 carry the expected name and report access that Android still confirms.
 
+A pending request cancelled by detach resolves false. Starting another request
+with an invalidated view fails with `StateError`. If a successful reply was
+already queued for Dart when the device ended, Dart rejects that late success
+instead of reporting access to an invalidated device.
+
 `Call.openingName` is set for a pending open. Detach clears it under the session
-monitor, cancelling that attempt rather than future uses of the saved descriptor.
+monitor, cancelling that attempt. All saved views of the removed device are also
+invalidated and cannot be reused after reconnection.
 A worker not yet in Android fails before opening. A worker already in Android
 closes any returned connection instead of publishing it. A cleanup failure is
 reported to the waiting caller and logged, not converted to null.
@@ -108,9 +121,29 @@ transport.
 ## JNI references and errors
 
 Adapters retain original Java descriptors. Temporary strings, arrays and callback
-arguments are released after decoding. Returned adapters use native finalizers
-for retained references because descriptors have no public dispose method.
-Native connection close is separate from releasing its Java wrapper reference.
+arguments are released after decoding. Each adapter registers its owned JNI
+references weakly with a shared Dart `DeviceLifetime`; unused wrappers can still
+be collected normally instead of accumulating until unplug.
+
+The Java flag is checked before native access, including before asynchronous
+success decoding. Removal releases device and child references explicitly. Only
+the device's name, equality and hash survive; descriptor getters fail with
+`StateError`. The detach callback performs cleanup even when public streams have
+no subscribers, and emits a metadata-only device. Engine disposal invalidates
+all owners before releasing the session reference. A late callback for an ended
+owner cannot invalidate a different current owner with the same name.
+
+Connection invalidation starts the existing Java close operation; the Dart
+connection handle is released when its close future settles. Java workers and
+admitted calls retain the local strong references needed to finish safely. The
+existing native lifetime lock still excludes close from admitted native access.
+Automatic cleanup errors go through Flutter's error handler. Native finalizers
+remain a fallback for wrappers no longer held by application code.
+
+`deviceDetached` signals invalidation/start of cleanup, not completion of native
+close. Caller-held Dart objects and copied FD integers/descriptor bytes cannot
+be erased by the library. No polling is introduced: removal is observed through
+Android events or the next enumeration.
 
 `_call` supplies a nonblocking asynchronous JNIgen listener. Java retains the
 proxy while work is pending, so Dart releases its temporary proxy reference after
@@ -133,7 +166,7 @@ Headless engines retain discovery and broadcast handling without an Activity.
 | Engine attach | Register a session using application context; the session does not retain an Activity. |
 | Initial Activity intent/recreation | Check live presence and consume attach silently; enumerate for initial state. |
 | `onNewIntent()` or USB attach broadcast | Share name-based notification state; notify once until removal. |
-| USB detach | Close/cancel resources by name, then notify if the name was known. Do not ignore detach merely because the name is present again. |
+| USB detach | End the device lifetime, cancel pending work and schedule close, then notify if the name was known. Do not ignore detach merely because the name is present again. |
 | Activity detach/configuration change | Remove the exact old listener; preserve session resources. |
 | Engine restart | End the old session, register a new one and treat the stored Activity intent as initial state; retain Activity registration. |
 | Engine/plugin shutdown | Remove listeners, unregister receivers, fail pending calls and schedule close before worker shutdown. |

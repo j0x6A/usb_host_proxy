@@ -4,6 +4,8 @@ import 'usb_endpoint.dart';
 ///
 /// Each descriptor represents one interface/alternate-setting combination.
 /// Reading it neither claims the interface nor selects that alternate setting.
+/// Android views share their device's lifetime. After observed removal or session
+/// termination, the JNI reference is released and reads fail with [StateError].
 abstract class UsbInterface {
   /// Returns bAlternateSetting.
   int getAlternateSetting();

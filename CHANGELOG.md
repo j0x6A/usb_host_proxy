@@ -1,11 +1,16 @@
 ## 0.2.0 (unreleased)
 
+- End device/descriptor lifetimes on detach, observed absence and session end.
+  Explicitly release their JNI references and start connection cleanup even
+  without stream listeners. Retain only device name/equality/hash after removal;
+  old views fail with StateError and cannot revive when Android reuses a name.
+  Add ownership and invalidation tests; transport remains unimplemented.
 - Add a first-use workflow and connection example, separate backend internals
   into a maintainer's guide, and clarify implemented scope versus test coverage.
   Correct descriptions that implied active transport or repository visibility.
 - Use Android device names without private device UUIDs, generation checks or
   deviceInstance permission extras. Keep session-isolated callback routes and
-  request codes; accept older same-session device views and preserve native results.
+  request codes and preserve native results for views of a still-present device.
 - Honor detach by name even when that name is already present again. Invalidate
   pending open attempts separately, close late native results and clean resources
   created before rediscovery during enumeration and engine shutdown.

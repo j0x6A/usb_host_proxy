@@ -44,8 +44,11 @@ class UsbManager {
 
   /// Stream of device views for names removed from the observed device list.
   ///
-  /// Connections for that name are invalidated before notification. Descriptor
-  /// objects remain readable and are not locally blacklisted as future inputs.
+  /// Device views and all their descendants are invalidated before notification;
+  /// connection cleanup has started but may still be finishing admitted calls.
+  /// The payload retains only its name, equality and hash, without JNI handles.
+  /// Cleanup does not require a subscriber. The manager remains usable when the
+  /// device list becomes empty.
   Stream<UsbDevice> get deviceDetached => Platform.isAndroid
       ? AndroidUsb.instance.deviceDetached
       : const Stream<UsbDevice>.empty();
@@ -55,8 +58,10 @@ class UsbManager {
   /// Does not open devices or request permission. Enumeration can report detach
   /// for a previously known device that is now absent, but does not emit attach
   /// for every listed device. Returns current framework views without copying
-  /// descriptor fields; previous views are not mutated. Android adapter equality
-  /// and hashing follow the device name, independently of wrapper identity.
+  /// descriptor fields. Older views stay valid only until observed removal or
+  /// session termination; they cannot access a later device with the same name.
+  /// Android adapter equality and hashing follow the device name, independently
+  /// of wrapper identity.
   ///
   /// On Android the enumeration itself is synchronous JNI work. Other platforms
   /// currently return an empty map.
@@ -67,10 +72,10 @@ class UsbManager {
 
   /// Whether the application currently has permission to access [device].
   ///
-  /// Android's result is returned even for an older descriptor view. Objects
+  /// Android's result is returned for a still-valid descriptor view. Objects
   /// from another engine or implementation are rejected. The framework check runs
   /// synchronously despite this method returning a Future. Other platforms
-  /// currently return false.
+  /// currently return false. Invalidated Android views fail with [StateError].
   Future<bool> hasPermission(UsbDevice device) async {
     if (Platform.isAndroid) return AndroidUsb.instance.hasPermission(device);
     return false;
@@ -82,6 +87,9 @@ class UsbManager {
   /// detachment returns false. Session termination completes with an error.
   /// No timeout is imposed and an already-authorized attachment completes true.
   /// Another engine's device or a foreign implementation fails before native access.
+  /// Starting a new request with an invalidated device fails with [StateError].
+  /// A successful reply delivered after invalidation also fails with [StateError];
+  /// the false result of a pending request cancelled by detach is preserved.
   /// Other platforms currently return false without requesting anything.
   Future<bool> requestPermission(UsbDevice device) async {
     if (Platform.isAndroid) {
@@ -93,8 +101,8 @@ class UsbManager {
   /// Opens [device], or returns null if it cannot be opened.
   ///
   /// Does not request permission implicitly. Android exceptions are propagated.
-  /// Older views from this session are forwarded to Android without an attachment
-  /// generation check. Another engine/implementation fails with [ArgumentError].
+  /// A view from an ended device lifetime fails with [StateError], even if Android
+  /// reuses its name. Another engine/implementation fails with [ArgumentError].
   /// An open attempt invalidated by observed detach closes any late native result
   /// and fails with [StateError]. Session termination also fails pending opens.
   /// A closed connection is never reused. Other platforms return null.

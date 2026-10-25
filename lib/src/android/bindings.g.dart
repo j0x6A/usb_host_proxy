@@ -2200,7 +2200,7 @@ final class $UsbHostProxy$Session$Type$
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Device`
 ///
-/// A framework device view owned by one engine; not a lease on a USB attachment.
+/// Framework view whose native reference ends with the observed device presence.
 extension type UsbHostProxy$Device._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
@@ -2213,17 +2213,51 @@ extension type UsbHostProxy$Device._(jni$_.JObject _$this)
 }
 
 extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
-  static final _id_usbDevice = UsbHostProxy$Device._class.instanceFieldId(
-    r'usbDevice',
-    r'Landroid/hardware/usb/UsbDevice;',
+  static final _id_lifetime = UsbHostProxy$Device._class.instanceFieldId(
+    r'lifetime',
+    r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime;',
   );
 
-  /// from: `public final android.hardware.usb.UsbDevice usbDevice`
+  /// from: `public final dev.jx6A78.usb_host_proxy.UsbHostProxy$Lifetime lifetime`
   /// The returned object must be released after use, by calling the [release] method.
   ///
-  /// Original immutable framework descriptor reference.
-  UsbDevice? get usbDevice =>
-      _id_usbDevice.getNullable(this, UsbDevice.type) as UsbDevice?;
+  /// Shared invalidation flag and immutable name/hash; contains no USB handles.
+  UsbHostProxy$Lifetime? get lifetime =>
+      _id_lifetime.getNullable(this, UsbHostProxy$Lifetime.type)
+          as UsbHostProxy$Lifetime?;
+
+  static final _id_descriptor = UsbHostProxy$Device._class.instanceMethodId(
+    r'descriptor',
+    r'()Landroid/hardware/usb/UsbDevice;',
+  );
+
+  static final _descriptor =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public android.hardware.usb.UsbDevice descriptor()`
+  /// The returned object must be released after use, by calling the [release] method.
+  ///
+  /// Returns a live descriptor; Dart owns the returned JNI reference until invalidation.
+  UsbDevice? descriptor() {
+    final _$$selfRef = reference;
+    return _descriptor(
+      _$$selfRef.pointer,
+      _id_descriptor.pointer,
+    ).object<UsbDevice?>();
+  }
 
   static final _id_serial = UsbHostProxy$Device._class.instanceMethodId(
     r'serial',
@@ -2250,7 +2284,7 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
 
   /// from: `public void serial(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Reads the supplied framework object's serial after checking its owning session.
+  /// Reads serial on a worker, retaining a local reference only for the admitted call.
   void serial(UsbHostProxy$Completion? completion) {
     final _$$selfRef = reference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
@@ -2270,6 +2304,85 @@ final class $UsbHostProxy$Device$Type$
   @jni$_.internal
   @core$_.override
   String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Lifetime`
+///
+/// Shared validity of views obtained during one observed presence in Android's list.
+///This is resource ownership, not a hardware identifier: Android names still define equality.
+extension type UsbHostProxy$Lifetime._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$Lifetime> type =
+      $UsbHostProxy$Lifetime$Type$();
+}
+
+extension UsbHostProxy$Lifetime$$Methods on UsbHostProxy$Lifetime {
+  static final _id_name = UsbHostProxy$Lifetime._class.instanceFieldId(
+    r'name',
+    r'Ljava/lang/String;',
+  );
+
+  /// from: `public final java.lang.String name`
+  /// The returned object must be released after use, by calling the [release] method.
+  ///
+  /// Android name retained after native references have been cleared.
+  jni$_.JString? get name =>
+      _id_name.getNullable(this, jni$_.JString.type) as jni$_.JString?;
+
+  static final _id_deviceHash = UsbHostProxy$Lifetime._class.instanceFieldId(
+    r'deviceHash',
+    r'I',
+  );
+
+  /// from: `public final int deviceHash`
+  ///
+  /// Android UsbDevice hashes its name using Java String.hashCode().
+  core$_.int get deviceHash =>
+      _id_deviceHash.getNullable(this, jni$_.jint.type) as core$_.int;
+
+  static final _id_get$isAlive = UsbHostProxy$Lifetime._class.instanceMethodId(
+    r'isAlive',
+    r'()Z',
+  );
+
+  static final _get$isAlive =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallBooleanMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public boolean isAlive()`
+  ///
+  /// Safe to read from Dart before the asynchronous detach callback arrives.
+  core$_.bool get isAlive {
+    final _$$selfRef = reference;
+    return _get$isAlive(_$$selfRef.pointer, _id_get$isAlive.pointer).boolean;
+  }
+}
+
+final class $UsbHostProxy$Lifetime$Type$
+    extends jni$_.JType<UsbHostProxy$Lifetime> {
+  @jni$_.internal
+  const $UsbHostProxy$Lifetime$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime;';
 }
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Events`

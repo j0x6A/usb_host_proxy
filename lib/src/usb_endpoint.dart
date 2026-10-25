@@ -2,6 +2,8 @@
 ///
 /// Describes an endpoint; it does not own an open connection or submit transfers.
 /// Values come directly from Android's descriptor object through JNI.
+/// Observed device removal or session termination releases the JNI reference;
+/// subsequent reads fail with [StateError].
 abstract class UsbEndpoint {
   /// Returns bEndpointAddress, including its direction bit.
   int getAddress();
