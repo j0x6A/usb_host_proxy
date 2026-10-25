@@ -8,8 +8,8 @@ import 'usb_request.dart';
 
 /// A connection returned by `UsbManager.openDevice`.
 ///
-/// Android implements management and information operations through JNI.
-/// Transport and Windows extensions are not implemented by the Android backend.
+/// Android implements management, information and USB transport through JNI.
+/// Windows extensions are not implemented by the Android backend.
 /// Operations on a closed/detached Android connection fail with StateError.
 ///
 /// Each Android connection has an independent ordered queue for management
@@ -56,7 +56,12 @@ abstract class UsbDeviceConnection {
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
-  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
+  /// OUT bytes are snapshotted before submission; IN copies only the completed
+  /// prefix into this slice. IN requires writable memory. Do not modify the
+  /// slice until the future completes.
+  /// Null permits only an empty slice. Native byte counts (including negative
+  /// failure results) and exceptions are preserved; no 16 KiB limit is imposed.
+  /// Runs on a session worker, in parallel with other transfers and management.
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
     Uint8List? buffer, {
@@ -69,7 +74,11 @@ abstract class UsbDeviceConnection {
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
-  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
+  /// Direction comes from bit 7 of [requestType]. OUT bytes are snapshotted;
+  /// IN copies only the completed prefix. Null permits only an empty slice.
+  /// IN requires a writable buffer, not an unmodifiable view. Do not modify it
+  /// until completion. Native byte counts and exceptions are preserved.
+  /// Runs on a session worker, not the management FIFO.
   Future<int> controlTransfer(
     int requestType,
     int request,
@@ -84,7 +93,11 @@ abstract class UsbDeviceConnection {
   /// Waits for a completed request queued on any endpoint of this connection.
   ///
   /// [timeout] is in milliseconds. Null denotes an indefinite wait; zero polls.
-  /// Currently unsupported on Android: the returned future fails with UnsupportedError.
+  /// Uses the native no-argument or timed overload, respectively. A native timed
+  /// wait timeout throws Android's TimeoutException; null is its native error
+  /// result, not a synthesized timeout. Negative timed waits are rejected by Android.
+  /// Returns the original queued Dart request and updates its transferredLength
+  /// and IN slice before completing. Multiple waits may run on session workers.
   Future<UsbRequest?> requestWait({int? timeout});
 
   /// Closes the connection.
@@ -96,9 +109,13 @@ abstract class UsbDeviceConnection {
   /// throws, this connection is permanently unusable; that error is reported
   /// to the callers awaiting that attempt. Later close calls remain safe.
   /// Detaching the device or ending the engine session also closes it.
-  /// Explicit close drains already-accepted work; detach or session end rejects
-  /// queued work before native access. A native call already running is not
+  /// Explicit close drains already-accepted management work; detach or session
+  /// end rejects queued work before native access. A native call already running is not
   /// forcibly interrupted. JNI finalization alone does not close the connection.
+  /// Blocking transport is not joined or placed ahead of close in the FIFO.
+  /// Native close decides how already-entered transfers/waits terminate; there
+  /// is no watchdog, polling or added timeout. Native requests are also closed;
+  /// no completion or IN data is fabricated for abandoned requests.
   Future<void> close();
 
   // Windows USB pipe extensions. Every method in this group currently fails

@@ -1,8 +1,7 @@
 /// The shared USB host API for Android and Windows.
 ///
-/// Android management and device events use JNI. USB transport, UsbRequest and
-/// the Windows backend are not implemented. UsbRequest placeholders retain
-/// their documented behavior.
+/// Android management, device events and USB transport use JNI. The Windows
+/// backend is not implemented; non-Android placeholders retain their behavior.
 ///
 /// Android USB Host classes and protocol constants are represented without
 /// UsbAccessory. Potentially blocking operations execute outside the Dart

@@ -2,8 +2,8 @@
 
 Manual USB Host diagnostics for a physical Android device (API >=28, Android 9) with USB
 Host/OTG support. Start it from the launcher or Android's USB app chooser.
-Application ID: `dev.jx6A78.usb_host_proxy`. There are no data transfers and
-no Windows implementation.
+Application ID: `dev.jx6A78.usb_host_proxy`. This screen submits no data transfers
+(the plugin now implements Android transport). There is no Windows implementation.
 
 ## USB launch and defaults
 
@@ -180,6 +180,10 @@ They also check independent panel offsets after offscreen destruction/recreation
 lazy console rows with complete history and scrolling after multiline log bursts.
 Color tests include exception text resembling a USB/success message to ensure
 text content never determines the category.
+`test/transfer_buffer_test.dart` separately checks the library's pure Dart transport
+slice/copy-back helpers and unchanged non-Android request placeholders; it does
+not submit transfers through this screen. Java `UsbTransportTest` covers the
+mocked native transport boundary on API 28, 31, 33 and 35.
 Tests use controlled futures and never access real USB/JNI. They do not establish
 hardware correctness. Java unit tests check native result/error forwarding,
 descriptor validation, ordering and lifecycle independently of the UI.

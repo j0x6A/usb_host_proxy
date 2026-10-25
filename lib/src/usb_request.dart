@@ -1,42 +1,56 @@
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'android/android_usb.dart';
 import 'usb_device_connection.dart';
 import 'usb_endpoint.dart';
 
 /// A reusable asynchronous request for a bulk or interrupt endpoint.
 ///
-/// This class currently contains placeholders only; no requests are submitted.
+/// Android delegates to a native UsbRequest. Other platforms retain placeholders.
+/// On those platforms, getters return null, initialize/queue/cancel return false,
+/// and setClientData/close do nothing. Constructing a request does not open USB.
 class UsbRequest {
   /// Creates an uninitialized request, matching Android's public constructor.
   UsbRequest();
 
   /// Completed byte count, replacing Java ByteBuffer position advancement.
   ///
-  /// NOT IMPLEMENTED YET: always returns null.
-  int? get transferredLength => null;
+  /// Null before the first completion and while a new accepted queue is pending.
+  /// Updated when requestWait delivers this same request object, including cancel.
+  int? get transferredLength =>
+      Platform.isAndroid ? AndroidUsb.request(this).transferredLength : null;
 
   /// Returns the caller's context data.
   ///
-  /// NOT IMPLEMENTED YET: always returns null.
-  Object? getClientData() => null;
+  /// Android retains this Dart object without trying to serialize it through JNI.
+  Object? getClientData() =>
+      Platform.isAndroid ? AndroidUsb.request(this).getClientData() : null;
 
   /// Sets the caller's context data.
   ///
-  /// NOT IMPLEMENTED YET: does not store the supplied data.
-  void setClientData(Object? data) {}
+  /// This is opaque caller data, independent of the native completion identity.
+  void setClientData(Object? data) {
+    if (Platform.isAndroid) AndroidUsb.request(this).setClientData(data);
+  }
 
   /// Returns the endpoint associated with this request.
   ///
-  /// NOT IMPLEMENTED YET: always returns null.
-  UsbEndpoint? getEndpoint() => null;
+  /// Null before successful initialization and after close.
+  UsbEndpoint? getEndpoint() =>
+      Platform.isAndroid ? AndroidUsb.request(this).getEndpoint() : null;
 
   /// Initializes this request for [endpoint] on [connection].
   ///
-  /// NOT IMPLEMENTED YET: returns false without initializing the request.
+  /// Requires an original endpoint belonging to this connection's device.
+  /// Returns native true/false; close an initialized request before reinitializing.
   Future<bool> initialize(
     UsbDeviceConnection connection,
     UsbEndpoint endpoint,
   ) async {
+    if (Platform.isAndroid) {
+      return AndroidUsb.request(this).initialize(connection, endpoint);
+    }
     return false;
   }
 
@@ -44,20 +58,35 @@ class UsbRequest {
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   ///
-  /// NOT IMPLEMENTED YET: returns false without queuing or accessing the buffer.
+  /// OUT bytes are snapshotted at submission. IN bytes are copied back into the
+  /// supplied slice only when requestWait delivers completion. Do not modify or
+  /// reuse that slice/request until then. Null denotes a zero-length request.
+  /// IN requires a writable Uint8List, not an unmodifiable view.
+  /// False and exceptions preserve the previous completion and buffer ownership.
   Future<bool> queue(Uint8List? buffer, {int offset = 0, int? length}) async {
+    if (Platform.isAndroid) {
+      return AndroidUsb.request(this)
+          .queue(buffer, offset: offset, length: length);
+    }
     return false;
   }
 
   /// Requests cancellation of a queued operation; returns native acceptance.
   ///
-  /// NOT IMPLEMENTED YET: returns false without requesting cancellation.
+  /// Cancellation is not completion: drain the request with requestWait before
+  /// reuse. No fabricated completion, polling or retry is performed here.
+  /// An uninitialized/closed request or closing connection returns false.
   Future<bool> cancel() async {
+    if (Platform.isAndroid) return AndroidUsb.request(this).cancel();
     return false;
   }
 
   /// Releases request resources.
   ///
-  /// NOT IMPLEMENTED YET: does nothing.
-  Future<void> close() async {}
+  /// Android close is idempotent, does not await requestWait and invalidates any
+  /// outstanding Dart result. Connection close/detach also closes native requests.
+  /// Native close/cancel races retain platform outcomes; no timeout is added.
+  Future<void> close() async {
+    if (Platform.isAndroid) await AndroidUsb.request(this).close();
+  }
 }

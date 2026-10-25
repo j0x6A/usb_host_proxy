@@ -1,9 +1,16 @@
 ## 0.2.0 (unreleased)
 
 - Require Android API 28 (Android 9) or later in the plugin and diagnostic example.
+- Implement bulk/control transport and native UsbRequest initialize/queue/cancel/
+  close/wait through JNIgen; keep blocking I/O on parallel session workers and
+  management/close on the existing per-connection FIFO.
+- Preserve native outcomes/timeouts and original Dart request/client-data identity;
+  retain Java-owned buffers through completion and copy only completed IN bytes.
+- Regenerate private bindings and test transport concurrency, cleanup, errors and
+  buffer boundaries without changing the management-only diagnostic UI or Windows.
 - Implement Android USB Host enumeration, descriptor access, permissions,
   connection management, interface/configuration selection and device events
-  using JNI/JNIgen, without data transport.
+  using JNI/JNIgen.
 - Keep blocking connection operations on independent per-connection queues;
   close connections on detach and engine shutdown/restart.
 - Identify observed attachments privately by `deviceName-UUID`, retaining the
