@@ -1646,6 +1646,33 @@ extension type UsbHostProxy$Connection._(jni$_.JObject _$this)
 }
 
 extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
+  static final _id_checkResult = UsbHostProxy$Connection._class
+      .instanceMethodId(r'checkResult', r'()V');
+
+  static final _checkResult =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public void checkResult()`
+  ///
+  /// Rejects an open result invalidated before Dart receives its callback.
+  void checkResult() {
+    final _$$selfRef = reference;
+    _checkResult(_$$selfRef.pointer, _id_checkResult.pointer).check();
+  }
+
   static final _id_fileDescriptor = UsbHostProxy$Connection._class
       .instanceMethodId(r'fileDescriptor', r'()I');
 
@@ -1743,12 +1770,13 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
     ).check();
   }
 
-  static final _id_claim = UsbHostProxy$Connection._class.instanceMethodId(
-    r'claim',
-    r'(Landroid/hardware/usb/UsbInterface;ZLdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
-  );
+  static final _id_claimInterface = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'claimInterface',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;ZLdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
 
-  static final _claim =
+  static final _claimInterface =
       jni$_.ProtectedJniExtensions.lookup<
             jni$_.NativeFunction<
               jni$_.JThrowablePtr Function(
@@ -1774,74 +1802,33 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void claim(android.hardware.usb.UsbInterface intf, boolean force, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void claimInterface(dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface intf, boolean force, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Forwards claim/force without imposing descriptor-reference identity rules.
-  void claim(
-    UsbInterface? intf,
+  /// Resolves a live Java view, without imposing descriptor-identity or claim rules.
+  void claimInterface(
+    UsbHostProxy$Interface? intf,
     core$_.bool force,
     UsbHostProxy$Completion? completion,
   ) {
     final _$$selfRef = reference;
     final _$intf = intf?.reference ?? jni$_.jNullReference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
-    _claim(
+    _claimInterface(
       _$$selfRef.pointer,
-      _id_claim.pointer,
+      _id_claimInterface.pointer,
       _$intf.pointer,
       force ? 1 : 0,
       _$completion.pointer,
     ).check();
   }
 
-  static final _id_release$1 = UsbHostProxy$Connection._class.instanceMethodId(
-    r'release',
-    r'(Landroid/hardware/usb/UsbInterface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
-  );
-
-  static final _release$1 =
-      jni$_.ProtectedJniExtensions.lookup<
-            jni$_.NativeFunction<
-              jni$_.JThrowablePtr Function(
-                jni$_.Pointer<jni$_.Void>,
-                jni$_.JMethodIDPtr,
-                jni$_.VarArgs<
-                  (jni$_.Pointer<jni$_.Void>, jni$_.Pointer<jni$_.Void>)
-                >,
-              )
-            >
-          >('globalEnv_CallVoidMethod')
-          .asFunction<
-            jni$_.JThrowablePtr Function(
-              jni$_.Pointer<jni$_.Void>,
-              jni$_.JMethodIDPtr,
-              jni$_.Pointer<jni$_.Void>,
-              jni$_.Pointer<jni$_.Void>,
-            )
-          >();
-
-  /// from: `public void release(android.hardware.usb.UsbInterface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
-  ///
-  /// Forwards release without requiring a prior claim or recording ownership history.
-  void release$1(UsbInterface? intf, UsbHostProxy$Completion? completion) {
-    final _$$selfRef = reference;
-    final _$intf = intf?.reference ?? jni$_.jNullReference;
-    final _$completion = completion?.reference ?? jni$_.jNullReference;
-    _release$1(
-      _$$selfRef.pointer,
-      _id_release$1.pointer,
-      _$intf.pointer,
-      _$completion.pointer,
-    ).check();
-  }
-
-  static final _id_selectInterface = UsbHostProxy$Connection._class
+  static final _id_releaseInterface = UsbHostProxy$Connection._class
       .instanceMethodId(
-        r'selectInterface',
-        r'(Landroid/hardware/usb/UsbInterface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+        r'releaseInterface',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
       );
 
-  static final _selectInterface =
+  static final _releaseInterface =
       jni$_.ProtectedJniExtensions.lookup<
             jni$_.NativeFunction<
               jni$_.JThrowablePtr Function(
@@ -1862,31 +1849,31 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void selectInterface(android.hardware.usb.UsbInterface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void releaseInterface(dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Forwards the alternate-setting request; Android decides whether it is allowed.
-  void selectInterface(
-    UsbInterface? intf,
+  /// Explicit release remains an Android decision, even without a prior claim.
+  void releaseInterface(
+    UsbHostProxy$Interface? intf,
     UsbHostProxy$Completion? completion,
   ) {
     final _$$selfRef = reference;
     final _$intf = intf?.reference ?? jni$_.jNullReference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
-    _selectInterface(
+    _releaseInterface(
       _$$selfRef.pointer,
-      _id_selectInterface.pointer,
+      _id_releaseInterface.pointer,
       _$intf.pointer,
       _$completion.pointer,
     ).check();
   }
 
-  static final _id_selectConfiguration = UsbHostProxy$Connection._class
+  static final _id_setInterface = UsbHostProxy$Connection._class
       .instanceMethodId(
-        r'selectConfiguration',
-        r'(Landroid/hardware/usb/UsbConfiguration;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+        r'setInterface',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
       );
 
-  static final _selectConfiguration =
+  static final _setInterface =
       jni$_.ProtectedJniExtensions.lookup<
             jni$_.NativeFunction<
               jni$_.JThrowablePtr Function(
@@ -1907,19 +1894,64 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
             )
           >();
 
-  /// from: `public void selectConfiguration(android.hardware.usb.UsbConfiguration configuration, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  /// from: `public void setInterface(dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface intf, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Forwards the configuration without scanning this device's descriptor references.
-  void selectConfiguration(
-    UsbConfiguration? configuration,
+  /// Forwards a live alternate-setting descriptor to Android.
+  void setInterface(
+    UsbHostProxy$Interface? intf,
+    UsbHostProxy$Completion? completion,
+  ) {
+    final _$$selfRef = reference;
+    final _$intf = intf?.reference ?? jni$_.jNullReference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _setInterface(
+      _$$selfRef.pointer,
+      _id_setInterface.pointer,
+      _$intf.pointer,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_setConfiguration = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'setConfiguration',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Configuration;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
+
+  static final _setConfiguration =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<
+                  (jni$_.Pointer<jni$_.Void>, jni$_.Pointer<jni$_.Void>)
+                >,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void setConfiguration(dev.jx6A78.usb_host_proxy.UsbHostProxy$Configuration configuration, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  ///
+  /// Forwards a live configuration descriptor to Android.
+  void setConfiguration(
+    UsbHostProxy$Configuration? configuration,
     UsbHostProxy$Completion? completion,
   ) {
     final _$$selfRef = reference;
     final _$configuration = configuration?.reference ?? jni$_.jNullReference;
     final _$completion = completion?.reference ?? jni$_.jNullReference;
-    _selectConfiguration(
+    _setConfiguration(
       _$$selfRef.pointer,
-      _id_selectConfiguration.pointer,
+      _id_setConfiguration.pointer,
       _$configuration.pointer,
       _$completion.pointer,
     ).check();
@@ -2061,6 +2093,50 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
     ).object<jni$_.JArray<UsbHostProxy$Device?>?>();
   }
 
+  static final _id_eventDevice = UsbHostProxy$Session._class.instanceMethodId(
+    r'eventDevice',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;Z)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;',
+  );
+
+  static final _eventDevice =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Pointer<jni$_.Void>, jni$_.Int32)>,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+              core$_.int,
+            )
+          >();
+
+  /// from: `synchronized public dev.jx6A78.usb_host_proxy.UsbHostProxy$Device eventDevice(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, boolean detached)`
+  /// The returned object must be released after use, by calling the [release] method.
+  ///
+  /// Resolves delayed JNI event delivery in Java. Returning null means that the
+  ///event is obsolete; Dart forwards this decision without its own registry.
+  ///Discovery alone does not expose an attachment until enumeration or delivery.
+  UsbHostProxy$Device? eventDevice(
+    UsbHostProxy$Device? device,
+    core$_.bool detached,
+  ) {
+    final _$$selfRef = reference;
+    final _$device = device?.reference ?? jni$_.jNullReference;
+    return _eventDevice(
+      _$$selfRef.pointer,
+      _id_eventDevice.pointer,
+      _$device.pointer,
+      detached ? 1 : 0,
+    ).object<UsbHostProxy$Device?>();
+  }
+
   static final _id_hasPermission = UsbHostProxy$Session._class.instanceMethodId(
     r'hasPermission',
     r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)Z',
@@ -2198,40 +2274,301 @@ final class $UsbHostProxy$Session$Type$
   String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Session;';
 }
 
-/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Device`
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Endpoint`
 ///
-/// Framework view whose native reference ends with the observed device presence.
-extension type UsbHostProxy$Device._(jni$_.JObject _$this)
+/// Endpoint descriptor view; contains no transfer or connection state.
+extension type UsbHostProxy$Endpoint._(jni$_.JObject _$this)
     implements jni$_.JObject {
   static final _class = jni$_.JClass.forName(
-    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Device',
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Endpoint',
   );
 
   /// The type which includes information such as the signature of this class.
-  static const jni$_.JType<UsbHostProxy$Device> type =
-      $UsbHostProxy$Device$Type$();
+  static const jni$_.JType<UsbHostProxy$Endpoint> type =
+      $UsbHostProxy$Endpoint$Type$();
 }
 
-extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
-  static final _id_lifetime = UsbHostProxy$Device._class.instanceFieldId(
-    r'lifetime',
-    r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime;',
+extension UsbHostProxy$Endpoint$$Methods on UsbHostProxy$Endpoint {
+  static final _id_get$address = UsbHostProxy$Endpoint._class.instanceMethodId(
+    r'getAddress',
+    r'()I',
   );
 
-  /// from: `public final dev.jx6A78.usb_host_proxy.UsbHostProxy$Lifetime lifetime`
-  /// The returned object must be released after use, by calling the [release] method.
-  ///
-  /// Shared invalidation flag and immutable name/hash; contains no USB handles.
-  UsbHostProxy$Lifetime? get lifetime =>
-      _id_lifetime.getNullable(this, UsbHostProxy$Lifetime.type)
-          as UsbHostProxy$Lifetime?;
+  static final _get$address =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
 
-  static final _id_descriptor = UsbHostProxy$Device._class.instanceMethodId(
-    r'descriptor',
-    r'()Landroid/hardware/usb/UsbDevice;',
+  /// from: `public int getAddress()`
+  core$_.int get address {
+    final _$$selfRef = reference;
+    return _get$address(_$$selfRef.pointer, _id_get$address.pointer).integer;
+  }
+
+  static final _id_get$attributes = UsbHostProxy$Endpoint._class
+      .instanceMethodId(r'getAttributes', r'()I');
+
+  static final _get$attributes =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getAttributes()`
+  core$_.int get attributes {
+    final _$$selfRef = reference;
+    return _get$attributes(
+      _$$selfRef.pointer,
+      _id_get$attributes.pointer,
+    ).integer;
+  }
+
+  static final _id_get$direction = UsbHostProxy$Endpoint._class
+      .instanceMethodId(r'getDirection', r'()I');
+
+  static final _get$direction =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getDirection()`
+  core$_.int get direction {
+    final _$$selfRef = reference;
+    return _get$direction(
+      _$$selfRef.pointer,
+      _id_get$direction.pointer,
+    ).integer;
+  }
+
+  static final _id_get$endpointNumber = UsbHostProxy$Endpoint._class
+      .instanceMethodId(r'getEndpointNumber', r'()I');
+
+  static final _get$endpointNumber =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getEndpointNumber()`
+  core$_.int get endpointNumber {
+    final _$$selfRef = reference;
+    return _get$endpointNumber(
+      _$$selfRef.pointer,
+      _id_get$endpointNumber.pointer,
+    ).integer;
+  }
+
+  static final _id_get$interval = UsbHostProxy$Endpoint._class.instanceMethodId(
+    r'getInterval',
+    r'()I',
   );
 
-  static final _descriptor =
+  static final _get$interval =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterval()`
+  core$_.int get interval {
+    final _$$selfRef = reference;
+    return _get$interval(_$$selfRef.pointer, _id_get$interval.pointer).integer;
+  }
+
+  static final _id_get$maxPacketSize = UsbHostProxy$Endpoint._class
+      .instanceMethodId(r'getMaxPacketSize', r'()I');
+
+  static final _get$maxPacketSize =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getMaxPacketSize()`
+  core$_.int get maxPacketSize {
+    final _$$selfRef = reference;
+    return _get$maxPacketSize(
+      _$$selfRef.pointer,
+      _id_get$maxPacketSize.pointer,
+    ).integer;
+  }
+
+  static final _id_get$type$1 = UsbHostProxy$Endpoint._class.instanceMethodId(
+    r'getType',
+    r'()I',
+  );
+
+  static final _get$type$1 =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getType()`
+  core$_.int get type$1 {
+    final _$$selfRef = reference;
+    return _get$type$1(_$$selfRef.pointer, _id_get$type$1.pointer).integer;
+  }
+}
+
+final class $UsbHostProxy$Endpoint$Type$
+    extends jni$_.JType<UsbHostProxy$Endpoint> {
+  @jni$_.internal
+  const $UsbHostProxy$Endpoint$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Endpoint;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface`
+///
+/// Interface/alternate-setting view; does not track claims or selected settings.
+extension type UsbHostProxy$Interface._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Interface',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$Interface> type =
+      $UsbHostProxy$Interface$Type$();
+}
+
+extension UsbHostProxy$Interface$$Methods on UsbHostProxy$Interface {
+  static final _id_get$id = UsbHostProxy$Interface._class.instanceMethodId(
+    r'getId',
+    r'()I',
+  );
+
+  static final _get$id =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getId()`
+  core$_.int get id {
+    final _$$selfRef = reference;
+    return _get$id(_$$selfRef.pointer, _id_get$id.pointer).integer;
+  }
+
+  static final _id_get$alternateSetting = UsbHostProxy$Interface._class
+      .instanceMethodId(r'getAlternateSetting', r'()I');
+
+  static final _get$alternateSetting =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getAlternateSetting()`
+  core$_.int get alternateSetting {
+    final _$$selfRef = reference;
+    return _get$alternateSetting(
+      _$$selfRef.pointer,
+      _id_get$alternateSetting.pointer,
+    ).integer;
+  }
+
+  static final _id_get$name = UsbHostProxy$Interface._class.instanceMethodId(
+    r'getName',
+    r'()Ljava/lang/String;',
+  );
+
+  static final _get$name =
       jni$_.ProtectedJniExtensions.lookup<
             jni$_.NativeFunction<
               jni$_.JniResult Function(
@@ -2247,16 +2584,889 @@ extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
             )
           >();
 
-  /// from: `public android.hardware.usb.UsbDevice descriptor()`
+  /// from: `public java.lang.String getName()`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JString? get name {
+    final _$$selfRef = reference;
+    return _get$name(
+      _$$selfRef.pointer,
+      _id_get$name.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_get$interfaceClass = UsbHostProxy$Interface._class
+      .instanceMethodId(r'getInterfaceClass', r'()I');
+
+  static final _get$interfaceClass =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterfaceClass()`
+  core$_.int get interfaceClass {
+    final _$$selfRef = reference;
+    return _get$interfaceClass(
+      _$$selfRef.pointer,
+      _id_get$interfaceClass.pointer,
+    ).integer;
+  }
+
+  static final _id_get$interfaceSubclass = UsbHostProxy$Interface._class
+      .instanceMethodId(r'getInterfaceSubclass', r'()I');
+
+  static final _get$interfaceSubclass =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterfaceSubclass()`
+  core$_.int get interfaceSubclass {
+    final _$$selfRef = reference;
+    return _get$interfaceSubclass(
+      _$$selfRef.pointer,
+      _id_get$interfaceSubclass.pointer,
+    ).integer;
+  }
+
+  static final _id_get$interfaceProtocol = UsbHostProxy$Interface._class
+      .instanceMethodId(r'getInterfaceProtocol', r'()I');
+
+  static final _get$interfaceProtocol =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterfaceProtocol()`
+  core$_.int get interfaceProtocol {
+    final _$$selfRef = reference;
+    return _get$interfaceProtocol(
+      _$$selfRef.pointer,
+      _id_get$interfaceProtocol.pointer,
+    ).integer;
+  }
+
+  static final _id_get$endpointCount = UsbHostProxy$Interface._class
+      .instanceMethodId(r'getEndpointCount', r'()I');
+
+  static final _get$endpointCount =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getEndpointCount()`
+  core$_.int get endpointCount {
+    final _$$selfRef = reference;
+    return _get$endpointCount(
+      _$$selfRef.pointer,
+      _id_get$endpointCount.pointer,
+    ).integer;
+  }
+
+  static final _id_getEndpoint = UsbHostProxy$Interface._class.instanceMethodId(
+    r'getEndpoint',
+    r'(I)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Endpoint;',
+  );
+
+  static final _getEndpoint =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int32,)>,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+            )
+          >();
+
+  /// from: `public dev.jx6A78.usb_host_proxy.UsbHostProxy$Endpoint getEndpoint(int index)`
+  /// The returned object must be released after use, by calling the [release] method.
+  UsbHostProxy$Endpoint? getEndpoint(core$_.int index) {
+    final _$$selfRef = reference;
+    return _getEndpoint(
+      _$$selfRef.pointer,
+      _id_getEndpoint.pointer,
+      index,
+    ).object<UsbHostProxy$Endpoint?>();
+  }
+}
+
+final class $UsbHostProxy$Interface$Type$
+    extends jni$_.JType<UsbHostProxy$Interface> {
+  @jni$_.internal
+  const $UsbHostProxy$Interface$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Configuration`
+///
+/// Configuration view; validity and framework ownership remain in Java.
+extension type UsbHostProxy$Configuration._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Configuration',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$Configuration> type =
+      $UsbHostProxy$Configuration$Type$();
+}
+
+extension UsbHostProxy$Configuration$$Methods on UsbHostProxy$Configuration {
+  static final _id_get$id = UsbHostProxy$Configuration._class.instanceMethodId(
+    r'getId',
+    r'()I',
+  );
+
+  static final _get$id =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getId()`
+  core$_.int get id {
+    final _$$selfRef = reference;
+    return _get$id(_$$selfRef.pointer, _id_get$id.pointer).integer;
+  }
+
+  static final _id_get$name = UsbHostProxy$Configuration._class
+      .instanceMethodId(r'getName', r'()Ljava/lang/String;');
+
+  static final _get$name =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public java.lang.String getName()`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JString? get name {
+    final _$$selfRef = reference;
+    return _get$name(
+      _$$selfRef.pointer,
+      _id_get$name.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_get$maxPower = UsbHostProxy$Configuration._class
+      .instanceMethodId(r'getMaxPower', r'()I');
+
+  static final _get$maxPower =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getMaxPower()`
+  core$_.int get maxPower {
+    final _$$selfRef = reference;
+    return _get$maxPower(_$$selfRef.pointer, _id_get$maxPower.pointer).integer;
+  }
+
+  static final _id_get$isRemoteWakeup = UsbHostProxy$Configuration._class
+      .instanceMethodId(r'isRemoteWakeup', r'()Z');
+
+  static final _get$isRemoteWakeup =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallBooleanMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public boolean isRemoteWakeup()`
+  core$_.bool get isRemoteWakeup {
+    final _$$selfRef = reference;
+    return _get$isRemoteWakeup(
+      _$$selfRef.pointer,
+      _id_get$isRemoteWakeup.pointer,
+    ).boolean;
+  }
+
+  static final _id_get$isSelfPowered = UsbHostProxy$Configuration._class
+      .instanceMethodId(r'isSelfPowered', r'()Z');
+
+  static final _get$isSelfPowered =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallBooleanMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public boolean isSelfPowered()`
+  core$_.bool get isSelfPowered {
+    final _$$selfRef = reference;
+    return _get$isSelfPowered(
+      _$$selfRef.pointer,
+      _id_get$isSelfPowered.pointer,
+    ).boolean;
+  }
+
+  static final _id_get$interfaceCount = UsbHostProxy$Configuration._class
+      .instanceMethodId(r'getInterfaceCount', r'()I');
+
+  static final _get$interfaceCount =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterfaceCount()`
+  core$_.int get interfaceCount {
+    final _$$selfRef = reference;
+    return _get$interfaceCount(
+      _$$selfRef.pointer,
+      _id_get$interfaceCount.pointer,
+    ).integer;
+  }
+
+  static final _id_getInterface = UsbHostProxy$Configuration._class
+      .instanceMethodId(
+        r'getInterface',
+        r'(I)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;',
+      );
+
+  static final _getInterface =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int32,)>,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+            )
+          >();
+
+  /// from: `public dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface getInterface(int index)`
+  /// The returned object must be released after use, by calling the [release] method.
+  UsbHostProxy$Interface? getInterface(core$_.int index) {
+    final _$$selfRef = reference;
+    return _getInterface(
+      _$$selfRef.pointer,
+      _id_getInterface.pointer,
+      index,
+    ).object<UsbHostProxy$Interface?>();
+  }
+}
+
+final class $UsbHostProxy$Configuration$Type$
+    extends jni$_.JType<UsbHostProxy$Configuration> {
+  @jni$_.internal
+  const $UsbHostProxy$Configuration$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature =>
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Configuration;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Device`
+///
+/// Framework view whose native reference ends with the observed device presence.
+extension type UsbHostProxy$Device._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Device',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$Device> type =
+      $UsbHostProxy$Device$Type$();
+}
+
+extension UsbHostProxy$Device$$Methods on UsbHostProxy$Device {
+  static final _id_get$deviceName = UsbHostProxy$Device._class.instanceMethodId(
+    r'getDeviceName',
+    r'()Ljava/lang/String;',
+  );
+
+  static final _get$deviceName =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public java.lang.String getDeviceName()`
   /// The returned object must be released after use, by calling the [release] method.
   ///
-  /// Returns a live descriptor; Dart owns the returned JNI reference until invalidation.
-  UsbDevice? descriptor() {
+  /// Name and equality/hash remain usable after invalidation.
+  jni$_.JString? get deviceName {
     final _$$selfRef = reference;
-    return _descriptor(
+    return _get$deviceName(
       _$$selfRef.pointer,
-      _id_descriptor.pointer,
-    ).object<UsbDevice?>();
+      _id_get$deviceName.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_equals = UsbHostProxy$Device._class.instanceMethodId(
+    r'equals',
+    r'(Ljava/lang/Object;)Z',
+  );
+
+  static final _equals =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Pointer<jni$_.Void>,)>,
+              )
+            >
+          >('globalEnv_CallBooleanMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public boolean equals(java.lang.Object other)`
+  core$_.bool equals(jni$_.JObject? other) {
+    final _$$selfRef = reference;
+    final _$other = other?.reference ?? jni$_.jNullReference;
+    return _equals(
+      _$$selfRef.pointer,
+      _id_equals.pointer,
+      _$other.pointer,
+    ).boolean;
+  }
+
+  static final _id_hashCode$1 = UsbHostProxy$Device._class.instanceMethodId(
+    r'hashCode',
+    r'()I',
+  );
+
+  static final _hashCode$1 =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int hashCode()`
+  core$_.int hashCode$1() {
+    final _$$selfRef = reference;
+    return _hashCode$1(_$$selfRef.pointer, _id_hashCode$1.pointer).integer;
+  }
+
+  static final _id_get$deviceId = UsbHostProxy$Device._class.instanceMethodId(
+    r'getDeviceId',
+    r'()I',
+  );
+
+  static final _get$deviceId =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getDeviceId()`
+  core$_.int get deviceId {
+    final _$$selfRef = reference;
+    return _get$deviceId(_$$selfRef.pointer, _id_get$deviceId.pointer).integer;
+  }
+
+  static final _id_get$deviceClass = UsbHostProxy$Device._class
+      .instanceMethodId(r'getDeviceClass', r'()I');
+
+  static final _get$deviceClass =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getDeviceClass()`
+  core$_.int get deviceClass {
+    final _$$selfRef = reference;
+    return _get$deviceClass(
+      _$$selfRef.pointer,
+      _id_get$deviceClass.pointer,
+    ).integer;
+  }
+
+  static final _id_get$deviceSubclass = UsbHostProxy$Device._class
+      .instanceMethodId(r'getDeviceSubclass', r'()I');
+
+  static final _get$deviceSubclass =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getDeviceSubclass()`
+  core$_.int get deviceSubclass {
+    final _$$selfRef = reference;
+    return _get$deviceSubclass(
+      _$$selfRef.pointer,
+      _id_get$deviceSubclass.pointer,
+    ).integer;
+  }
+
+  static final _id_get$deviceProtocol = UsbHostProxy$Device._class
+      .instanceMethodId(r'getDeviceProtocol', r'()I');
+
+  static final _get$deviceProtocol =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getDeviceProtocol()`
+  core$_.int get deviceProtocol {
+    final _$$selfRef = reference;
+    return _get$deviceProtocol(
+      _$$selfRef.pointer,
+      _id_get$deviceProtocol.pointer,
+    ).integer;
+  }
+
+  static final _id_get$vendorId = UsbHostProxy$Device._class.instanceMethodId(
+    r'getVendorId',
+    r'()I',
+  );
+
+  static final _get$vendorId =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getVendorId()`
+  core$_.int get vendorId {
+    final _$$selfRef = reference;
+    return _get$vendorId(_$$selfRef.pointer, _id_get$vendorId.pointer).integer;
+  }
+
+  static final _id_get$productId = UsbHostProxy$Device._class.instanceMethodId(
+    r'getProductId',
+    r'()I',
+  );
+
+  static final _get$productId =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getProductId()`
+  core$_.int get productId {
+    final _$$selfRef = reference;
+    return _get$productId(
+      _$$selfRef.pointer,
+      _id_get$productId.pointer,
+    ).integer;
+  }
+
+  static final _id_get$manufacturerName = UsbHostProxy$Device._class
+      .instanceMethodId(r'getManufacturerName', r'()Ljava/lang/String;');
+
+  static final _get$manufacturerName =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public java.lang.String getManufacturerName()`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JString? get manufacturerName {
+    final _$$selfRef = reference;
+    return _get$manufacturerName(
+      _$$selfRef.pointer,
+      _id_get$manufacturerName.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_get$productName = UsbHostProxy$Device._class
+      .instanceMethodId(r'getProductName', r'()Ljava/lang/String;');
+
+  static final _get$productName =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public java.lang.String getProductName()`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JString? get productName {
+    final _$$selfRef = reference;
+    return _get$productName(
+      _$$selfRef.pointer,
+      _id_get$productName.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_get$version = UsbHostProxy$Device._class.instanceMethodId(
+    r'getVersion',
+    r'()Ljava/lang/String;',
+  );
+
+  static final _get$version =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public java.lang.String getVersion()`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JString? get version {
+    final _$$selfRef = reference;
+    return _get$version(
+      _$$selfRef.pointer,
+      _id_get$version.pointer,
+    ).object<jni$_.JString?>();
+  }
+
+  static final _id_get$configurationCount = UsbHostProxy$Device._class
+      .instanceMethodId(r'getConfigurationCount', r'()I');
+
+  static final _get$configurationCount =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getConfigurationCount()`
+  core$_.int get configurationCount {
+    final _$$selfRef = reference;
+    return _get$configurationCount(
+      _$$selfRef.pointer,
+      _id_get$configurationCount.pointer,
+    ).integer;
+  }
+
+  static final _id_get$interfaceCount = UsbHostProxy$Device._class
+      .instanceMethodId(r'getInterfaceCount', r'()I');
+
+  static final _get$interfaceCount =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallIntMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public int getInterfaceCount()`
+  core$_.int get interfaceCount {
+    final _$$selfRef = reference;
+    return _get$interfaceCount(
+      _$$selfRef.pointer,
+      _id_get$interfaceCount.pointer,
+    ).integer;
+  }
+
+  static final _id_getConfiguration = UsbHostProxy$Device._class
+      .instanceMethodId(
+        r'getConfiguration',
+        r'(I)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Configuration;',
+      );
+
+  static final _getConfiguration =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int32,)>,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+            )
+          >();
+
+  /// from: `public dev.jx6A78.usb_host_proxy.UsbHostProxy$Configuration getConfiguration(int index)`
+  /// The returned object must be released after use, by calling the [release] method.
+  UsbHostProxy$Configuration? getConfiguration(core$_.int index) {
+    final _$$selfRef = reference;
+    return _getConfiguration(
+      _$$selfRef.pointer,
+      _id_getConfiguration.pointer,
+      index,
+    ).object<UsbHostProxy$Configuration?>();
+  }
+
+  static final _id_getInterface = UsbHostProxy$Device._class.instanceMethodId(
+    r'getInterface',
+    r'(I)Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Interface;',
+  );
+
+  static final _getInterface =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int32,)>,
+              )
+            >
+          >('globalEnv_CallObjectMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+            )
+          >();
+
+  /// from: `public dev.jx6A78.usb_host_proxy.UsbHostProxy$Interface getInterface(int index)`
+  /// The returned object must be released after use, by calling the [release] method.
+  UsbHostProxy$Interface? getInterface(core$_.int index) {
+    final _$$selfRef = reference;
+    return _getInterface(
+      _$$selfRef.pointer,
+      _id_getInterface.pointer,
+      index,
+    ).object<UsbHostProxy$Interface?>();
   }
 
   static final _id_serial = UsbHostProxy$Device._class.instanceMethodId(
@@ -2304,85 +3514,6 @@ final class $UsbHostProxy$Device$Type$
   @jni$_.internal
   @core$_.override
   String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;';
-}
-
-/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Lifetime`
-///
-/// Shared validity of views obtained during one observed presence in Android's list.
-///This is resource ownership, not a hardware identifier: Android names still define equality.
-extension type UsbHostProxy$Lifetime._(jni$_.JObject _$this)
-    implements jni$_.JObject {
-  static final _class = jni$_.JClass.forName(
-    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime',
-  );
-
-  /// The type which includes information such as the signature of this class.
-  static const jni$_.JType<UsbHostProxy$Lifetime> type =
-      $UsbHostProxy$Lifetime$Type$();
-}
-
-extension UsbHostProxy$Lifetime$$Methods on UsbHostProxy$Lifetime {
-  static final _id_name = UsbHostProxy$Lifetime._class.instanceFieldId(
-    r'name',
-    r'Ljava/lang/String;',
-  );
-
-  /// from: `public final java.lang.String name`
-  /// The returned object must be released after use, by calling the [release] method.
-  ///
-  /// Android name retained after native references have been cleared.
-  jni$_.JString? get name =>
-      _id_name.getNullable(this, jni$_.JString.type) as jni$_.JString?;
-
-  static final _id_deviceHash = UsbHostProxy$Lifetime._class.instanceFieldId(
-    r'deviceHash',
-    r'I',
-  );
-
-  /// from: `public final int deviceHash`
-  ///
-  /// Android UsbDevice hashes its name using Java String.hashCode().
-  core$_.int get deviceHash =>
-      _id_deviceHash.getNullable(this, jni$_.jint.type) as core$_.int;
-
-  static final _id_get$isAlive = UsbHostProxy$Lifetime._class.instanceMethodId(
-    r'isAlive',
-    r'()Z',
-  );
-
-  static final _get$isAlive =
-      jni$_.ProtectedJniExtensions.lookup<
-            jni$_.NativeFunction<
-              jni$_.JniResult Function(
-                jni$_.Pointer<jni$_.Void>,
-                jni$_.JMethodIDPtr,
-              )
-            >
-          >('globalEnv_CallBooleanMethod')
-          .asFunction<
-            jni$_.JniResult Function(
-              jni$_.Pointer<jni$_.Void>,
-              jni$_.JMethodIDPtr,
-            )
-          >();
-
-  /// from: `public boolean isAlive()`
-  ///
-  /// Safe to read from Dart before the asynchronous detach callback arrives.
-  core$_.bool get isAlive {
-    final _$$selfRef = reference;
-    return _get$isAlive(_$$selfRef.pointer, _id_get$isAlive.pointer).boolean;
-  }
-}
-
-final class $UsbHostProxy$Lifetime$Type$
-    extends jni$_.JType<UsbHostProxy$Lifetime> {
-  @jni$_.internal
-  const $UsbHostProxy$Lifetime$Type$();
-
-  @jni$_.internal
-  @core$_.override
-  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Lifetime;';
 }
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Events`

@@ -109,8 +109,8 @@ abstract class UsbDeviceConnection {
   /// throws, this connection is permanently unusable; that error is reported
   /// to the callers awaiting that attempt. Later close calls remain safe.
   /// Detaching the device or ending the engine session also closes it.
-  /// The retained JNI connection reference is released after the close future
-  /// settles. Device invalidation initiates this cleanup even without listeners;
+  /// Java initiates device/session cleanup even without Dart listeners. The
+  /// retained JNI view can remain until GC after Java clears its native connection;
   /// a detach notification does not mean native close has already finished.
   /// Close, detach and session end reject work not yet admitted to native access,
   /// even if it has already been submitted to a worker. Close runs on a session

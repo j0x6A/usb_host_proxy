@@ -1,14 +1,16 @@
 ## 0.2.0 (unreleased)
 
-- Preserve completed Java management/permission results across delayed Dart
-  delivery. Filter obsolete detach callbacks after a newer same-name resource
-  owner has reached Dart, while retaining cleanup of the removed owner's JNI
-  references. Keep native close ownership and admission checks unchanged.
-- End device/descriptor lifetimes on detach, observed absence and session end.
-  Explicitly release their JNI references and start connection cleanup even
-  without stream listeners. Retain only device name/equality/hash after removal;
-  old views fail with StateError and cannot revive when Android reuses a name.
-  Add ownership and invalidation tests; transport remains unimplemented.
+- Make Java the sole owner of USB lifecycle, descriptor validity, delayed-event
+  admission and automatic cleanup. Dart forwards calls/results/events and retains
+  only JNI references to Java views; remove its lifecycle registry and helpers.
+- Clear all Java descriptor holders on removal/session end. Technical JNI
+  references to inert views may remain until Dart GC; name/equality/hash stay
+  usable and other getters fail with StateError. Keep the existing worker pool
+  and native close protection without FIFO or additional serialisation.
+- Preserve completed Java results across delayed delivery. Add Java coverage for
+  every descriptor getter, child invalidation, late child creation, event admission
+  and awaited proxy operations. Clear a stale diagnostic selection when Java
+  rejects its view, even if a same-name replacement has already been enumerated.
 - Add a first-use workflow and connection example, separate backend internals
   into a maintainer's guide, and clarify implemented scope versus test coverage.
   Correct descriptions that implied active transport or repository visibility.
@@ -24,7 +26,7 @@
   through the existing session worker pool. Close rejects unstarted native work
   immediately and uses exclusive lifetime protection after admitted calls return;
   management calls can run concurrently, with no FIFO or callback-order guarantee.
-- Delegate Android device equality and hashing to native UsbDevice methods,
+- Preserve Android device name-based equality and hashing in Java views,
   independently of wrapper identity. Remove interface/configuration
   reference-identity validation while retaining session and connection lifecycle
   checks; forward descriptors and preserve Android results and exceptions.

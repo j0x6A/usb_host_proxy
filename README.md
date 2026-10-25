@@ -6,7 +6,8 @@ interfaces. **It does not transfer application data.**
 
 The Android implementation uses Java and JNI. JNI lets Dart call Android classes;
 JNIgen generates the private bindings for those calls. Dart objects retain
-references to Android USB objects rather than copying their descriptor fields.
+references to Java views of Android USB objects rather than copying descriptor
+fields. Java owns USB validity and cleanup; Dart forwards calls and events.
 
 Version 0.2.0 is in development. The package is not configured for publication
 to pub.dev (`publish_to: none`). License: [BSD-3-Clause](LICENSE).
@@ -133,9 +134,11 @@ device implementations return false.
 
 Views remain valid while that device stays in Android's observed list. Detach,
 observed absence or engine shutdown permanently invalidates every saved device,
-configuration, interface and endpoint view. Their JNI references are released;
-implemented reads/operations then fail with `StateError`. Only the immutable
-device name, equality and Android-compatible hash remain usable without JNI.
+configuration, interface and endpoint view. Java clears their references to the
+original Android descriptors; subsequent reads/operations fail with `StateError`.
+Only the device name, equality and Android-compatible hash remain usable.
+Technical JNI references to these inert Java views may remain until Dart GC;
+they retain no USB descriptor or open native connection after cleanup completes.
 Enumerate again for a new view after reconnecting. Equal names/hashes do not
 revive an old object. Objects from another engine or implementation are rejected.
 
@@ -186,11 +189,12 @@ attach event. Enumeration alone does not synthesize attach.
 Android detach is authoritative: it closes connections and cancels pending
 permission/open work for that name, even if the latest list contains it again.
 `deviceDetached` means invalidation and the start of cleanup, not that native
-close has finished. Its payload has no JNI handles; use `getDeviceName()` for
-identification. Cleanup runs without stream subscribers. The manager and system
+close has finished. Its payload refers to an inert Java view; use
+`getDeviceName()` for identification. Java cleans up without Dart stream
+subscribers. The manager and system
 event receivers remain active even when no devices are present.
 If a newer view of a same-name device has already reached Dart, a queued detach
-for the old view is not forwarded to subscribers; it must not clear the newer
+for the old view is rejected by Java before forwarding; it must not clear the newer
 selection or close the newer connection.
 
 A late native open result is closed before reporting the failed open. Session
@@ -263,7 +267,7 @@ and [Activity launch modes](https://developer.android.com/guide/topics/manifest/
 | Permissions | Java tests cover coalescing, grant/refusal, old views, late replies, session isolation and errors. | System dialogs, device-class permissions and OEM behavior. |
 | Connections/management | Java tests cover native results/errors, concurrent calls, close exclusion, late opens and cleanup. | Actual kernel/device behavior, settings and resource teardown. |
 | Descriptor getters/equality | Getters read JNI; name/hash survive invalidation. Widget tests use fake descriptors. | JNI values, equality/hash and name/ID conversion. |
-| Resource ownership | Java tests check shared invalidation; Dart helper tests check cascading release, close completion and errors without JNI. | Actual JNI reference deletion and cleanup on a device. |
+| Resource ownership | Java tests check clearing every saved descriptor view, late child creation, event admission and native close. | Actual JNI finalization and cleanup on a device. |
 | Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
 | Request placeholders | Tests check null/false/no-op results without native/buffer access. | Transport is not implemented or verified. |
 
@@ -275,8 +279,8 @@ or JNI ownership/error-conversion correctness.
 
 In particular, automated tests do not exercise every descriptor getter through
 JNI, the real permission dialog, native name/ID conversion or physical unplug
-during a native call. The ownership-helper tests check release callbacks, not
-the JVM's actual reference deletion. These are verification gaps, not additional
+during a native call. The Java tests inspect cleared framework references, not
+the JVM's actual JNI finalization. These are verification gaps, not additional
 implemented features. Use the example's manual checklist on Android hardware.
 
 With dependencies and tooling already installed, run:

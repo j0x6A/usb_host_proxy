@@ -6,11 +6,12 @@ import 'usb_interface.dart';
 
 /// Android USB device API, excluding Parcelable serialization.
 ///
-/// Android adapters retain original descriptor references while the device is
-/// present. Observed detach/absence or session termination invalidates every
-/// view and its configuration/interface/endpoint objects, releasing their JNI
-/// references. Subsequent descriptor access fails with [StateError]. Only
-/// [getDeviceName], equality and hashCode remain available without JNI.
+/// Java views retain original Android descriptors while the device is present.
+/// Observed detach/absence or session termination clears those references and
+/// invalidates every device/configuration/interface/endpoint view. Subsequent
+/// descriptor access fails with [StateError]. Only [getDeviceName], equality and
+/// hashCode remain available. Dart may retain JNI references to inert Java views
+/// until GC; those views hold no Android USB descriptor after invalidation.
 /// A name or platform ID is not a persistent hardware identity and may be reused.
 ///
 /// Android adapters preserve Android's name-based equality and Java name hash:
@@ -38,7 +39,7 @@ abstract class UsbDevice {
   /// Returns the platform device name used as the device-list key.
   ///
   /// Android returns its original name without any plugin-specific suffix.
-  /// The immutable name remains available after invalidation, without JNI.
+  /// The immutable name remains available from Java after invalidation.
   String getDeviceName();
 
   /// Returns bDeviceProtocol.

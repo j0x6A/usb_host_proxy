@@ -297,6 +297,46 @@ void main() {
   );
 
   testWidgets(
+    'Java invalidation clears an old selection when a same-name scan overtakes detach',
+    (tester) async {
+      manager.permissions['A'] = true;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      final replacement = FakeDevice('A');
+      manager.devices['A'] = replacement;
+      manager.onCheck = (device) => identical(device, first)
+          ? Future.error(StateError('USB device is detached'))
+          : Future.value(true);
+      // Java suppresses the old queued detach after exposing the newer view.
+      await press(tester, 'refresh');
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(connection.closes, 1);
+      expect(enabled(tester, 'open'), isFalse);
+      expect(deviceChoices(tester), ['', 'A', 'B']);
+      await select(tester, 'A');
+      expect(find.text('Selected: A'), findsOneWidget);
+      expect(find.text('Permission: granted'), findsOneWidget);
+    },
+  );
+
+  testWidgets('A permission service error does not imply device invalidation', (
+    tester,
+  ) async {
+    manager.permissions['A'] = true;
+    await launch(tester);
+    await select(tester, 'A');
+    await press(tester, 'open');
+    manager.onCheck = (_) =>
+        Future.error(Exception('permission service failed'));
+    await press(tester, 'refresh');
+    expect(find.text('Selected: A'), findsOneWidget);
+    expect(find.text('Connection: Open'), findsOneWidget);
+    expect(find.text('Permission: unknown'), findsOneWidget);
+    expect(connection.closes, 0);
+  });
+
+  testWidgets(
     'Descriptor errors remain visible without hiding VID/PID or crashing',
     (tester) async {
       first.productError = true;

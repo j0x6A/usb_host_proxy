@@ -148,10 +148,13 @@ selection. Selection, discovery and permission-check versions discard obsolete
 results; original public device/interface references are passed to the plugin.
 Names are Android list keys. The plugin adds no device UUID. Observed removal
 invalidates saved device/descriptor views and starts connection cleanup. Only
-the old device's name, equality and hash remain available, without JNI handles;
+the old device's name, equality and hash remain usable through its inert Java view;
 reconnecting under the same name does not revive those views. The screen clears
 its selection on detach. While the device remains present, a new enumeration
-does not update fields of previously obtained descriptor views.
+does not update fields of previously obtained descriptor views. If Java rejects
+the selected view with `StateError` during a permission check, the screen clears
+that selection even when a newer same-name entry is present. This is UI cleanup
+following Java's decision, not a second USB lifecycle.
 
 One user operation runs at a time; cleanup also blocks new USB operations until
 it finishes. Discovery and device selection remain available. A pending permission
@@ -225,9 +228,10 @@ Blocked direct FD/raw reads verify that native close waits for their return
 while later reads are rejected. This does not add any operation to the UI.
 This does not cover JNI conversion or native USB behavior. Library features
 without screen controls require a separate caller for manual verification.
-`test/device_lifetime_test.dart` checks the production resource-ownership helpers
-without JNI: cascading invalidation, reference release, cleanup failures, native
-close completion, repeated close and independent lifetimes for reused names.
+Java tests also inspect all saved descriptor holders after removal/session end,
+exercise late child creation and event admission, and sequence proxy operations
+by awaiting their results. The former Dart lifecycle helper tests are removed
+with that implementation; lifecycle now belongs to Java.
 `test/usb_request_test.dart` separately checks the withdrawn transport's public
 UsbRequest placeholders: null/false/no-op results, no native calls and no buffer
 reads or writes. It does not test a working transport implementation.
@@ -277,5 +281,5 @@ For device-removal cleanup, also verify with a small caller using the public API
    even if Android reuses the name; the manager must remain usable throughout.
 
 These checks exercise the JNI boundary that the fake-backed widget tests and
-ownership-helper tests do not run. A detach event marks the start of cleanup;
+Java unit tests do not run. A detach event marks the start of cleanup;
 native close can finish later, after already-admitted native calls return.

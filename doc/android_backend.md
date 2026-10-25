@@ -11,7 +11,6 @@ its implemented scope.
 | --- | --- |
 | `lib/usb_host_proxy.dart`, `lib/src/usb_*.dart` | Exported classes, contracts, descriptor meanings, constants and placeholders. |
 | `lib/src/android/android_usb.dart` | JNI references, Java-to-Dart errors, completion-to-Future conversion and event streams. |
-| `lib/src/android/device_lifetime.dart` | Shared invalidation, weak resource registrations and exactly-once reference release; testable without JNI. |
 | `lib/src/android/bindings.g.dart` | Generated Java bindings; do not edit by hand. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxy.java` | Sessions, discovery, permissions, workers and native connection lifetime. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxyPlugin.java` | Flutter Engine/Activity callbacks and intent-listener registration. |
@@ -20,12 +19,14 @@ its implemented scope.
 | `example/lib/main.dart`, `example/test` | Diagnostic screen and fake-backed widget/placeholder tests. |
 
 For a descriptor read, follow `UsbDevice.getProductName()` to `_AndroidDevice`
-and the generated getter. The shared lifetime is checked first; the getter then
-reads the original Android object directly, without a worker or open connection.
+and the generated getter to Java `Device.getProductName()`. Java checks the
+shared lifetime, then reads the original Android descriptor. No worker or open
+connection is needed for these getters.
 
-For management, follow `claimInterface()` through `_AndroidConnection`,
-`_deviceCall` and `_call`,
-Java `Connection.claim()` and `Connection.submit()`. A worker calls Android;
+For management, follow `claimInterface()` through `_AndroidConnection`, `_call`,
+Java `Connection.claimInterface()`, `Connection.claim()` and `Connection.submit()`.
+The Java entry point resolves the interface view to its live Android descriptor.
+A worker calls Android;
 `Completion` delivers the result/error and `_call` completes the Dart Future.
 `openDevice()` has a separate path because a late result may need cleanup before
 it can be given to Dart.
@@ -35,8 +36,9 @@ it can be given to Dart.
 | Object | What it retains | How its lifetime ends |
 | --- | --- | --- |
 | `Session` | Application context, receivers, workers, pending work and connections for one engine. | Engine restart/shutdown ends it permanently. |
-| `Device` | A native descriptor, owning session and shared `Lifetime`. Its notification flag deduplicates events. | Detach/observed absence/session end clears all snapshots' descriptors and permanently invalidates them. |
-| `Lifetime` | Immutable Android name/hash, an active flag and weak device-view registrations. | Ends before removal notification; it retains no USB descriptor after invalidation. |
+| `Device` | A Java-owned descriptor holder, owning session and shared `Lifetime`. Its notification flag deduplicates events. | Detach/observed absence/session end clears all snapshots' descriptors and permanently invalidates them. |
+| `Lifetime` | Immutable Android name/hash, an active flag and weak descriptor-holder registrations. | Ends before removal notification; it retains no USB descriptor after invalidation. |
+| `Configuration`, `Interface`, `Endpoint` | A Java-owned reference to the original Android descriptor, sharing the device lifetime. | Removal/session end clears the reference, even if Dart retains the view. |
 | `Connection` | One native connection; its name matches detach cleanup. | Close/detach/session end permanently blocks new native access. |
 | `Permission` | A PendingIntent and callers awaiting the same device-name decision. | Reply, detach or session end settles callers and cancels the PendingIntent. |
 | `Call` | A callback that a worker or cleanup may finish, at most once. | The callback is cleared before delivery, so late workers cannot deliver again. |
@@ -120,31 +122,35 @@ transport.
 
 ## JNI references and errors
 
-Adapters retain original Java descriptors. Temporary strings, arrays and callback
-arguments are released after decoding. Each adapter registers its owned JNI
-references weakly with a shared Dart `DeviceLifetime`; unused wrappers can still
-be collected normally instead of accumulating until unplug.
+Dart retains JNI references to Java views, not to the original Android
+configuration/interface/endpoint objects. Java keeps each original descriptor in
+a private holder, weakly registered with its device's `Lifetime`. Removal or
+session disposal clears every live holder, independently of Dart subscribers.
+Views no longer held by Dart can be collected without accumulating until unplug.
 
-The Java flag is checked before new native access. Scalar completion results
-and exceptions are preserved without a second validity check during decoding.
-Adopting a non-null Open result still checks its lifetime: a handle already
-invalidated and scheduled for close by Java must not be revived in Dart.
-Removal releases device and child references explicitly. Only
-the device's name, equality and hash survive; descriptor getters fail with
-`StateError`. The detach callback performs cleanup even when public streams have
-no subscribers, and emits a metadata-only device. Engine disposal invalidates
-all owners before releasing the session reference. A late callback for an ended
-owner cannot invalidate a different current owner with the same name.
-If a newer same-name owner has already been exposed to Dart, the old detach is
-not forwarded to public subscribers. Its reference cleanup still runs, but a
-name-only event must not cause the UI to discard the newer device/connection.
+Every descriptor getter checks validity in Java before accessing Android. A
+getter already admitted can finish with a local reference after removal. A child
+view created from such a late result registers no descriptor if its lifetime has
+ended. Saved views therefore cannot revive a disconnected device.
 
-Connection invalidation starts the existing Java close operation; the Dart
-connection handle is released when its close future settles. Java workers and
-admitted calls retain the local strong references needed to finish safely. The
-existing native lifetime lock still excludes close from admitted native access.
-Automatic cleanup errors go through Flutter's error handler. Native finalizers
-remain a fallback for wrappers no longer held by application code.
+The retained JNI references may stay until Dart GC. After Java cleanup they point
+to inert views: only the device's name, equality and hash remain usable; other
+getters fail through Java `IllegalStateException` translated to `StateError`.
+Native connection close is owned by Java and is independent of JNI finalization.
+Dart never starts automatic USB cleanup; explicit public `close()` calls simply
+await Java's existing completion callback.
+
+`Session.eventDevice()` decides whether a queued JNI event is still deliverable.
+Enumeration marks a lifetime as exposed; an accepted attach delivery does the
+same. Java rejects an old detach only after a newer same-name lifetime has been
+exposed. Discovering a replacement whose attach has not yet reached Dart does
+not suppress the removal of the old view. Dart forwards Java's result without a
+name registry, validity flags or event filtering of its own.
+
+Scalar results and exceptions already completed by Java are preserved during
+callback decoding. For a non-null Open result, Dart asks `Connection.checkResult()`
+to validate adoption in Java. A result invalidated before delivery fails without
+reviving the native connection; Java is already responsible for its cleanup.
 
 `deviceDetached` signals invalidation/start of cleanup, not completion of native
 close. Caller-held Dart objects and copied FD integers/descriptor bytes cannot

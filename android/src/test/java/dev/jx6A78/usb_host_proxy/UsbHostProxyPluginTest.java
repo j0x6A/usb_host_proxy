@@ -171,7 +171,7 @@ public class UsbHostProxyPluginTest {
         ActivityPluginBinding activity = activityBinding(usbIntent());
         plugin.onAttachedToActivity(activity);
         UsbHostProxy.Device device = session.deviceList()[0];
-        assertSame(usb, device.usbDevice);
+        assertSame(usb, device.descriptor());
         verifyNoInteractions(events);
         broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         assertTrue(listener(activity).onNewIntent(usbIntent()));

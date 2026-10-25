@@ -8,6 +8,7 @@ import android.content.IntentFilter;
 import android.hardware.usb.UsbConfiguration;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.os.BadParcelableException;
@@ -95,14 +96,16 @@ public final class UsbHostProxy {
      * Shared validity of views obtained during one observed presence in Android's list.
      * This is resource ownership, not a hardware identifier: Android names still define equality.
      */
-    public static final class Lifetime {
+    static final class Lifetime {
         /** Android name retained after native references have been cleared. */
         public final String name;
         /** Android UsbDevice hashes its name using Java String.hashCode(). */
         public final int deviceHash;
         private volatile boolean active = true;
+        /** True after this lifetime was returned to Dart, not merely discovered. Session-guarded. */
+        private boolean exposed = false;
         /** Weak registrations do not retain every framework snapshot until detach. */
-        private final Set<Device> views = Collections.newSetFromMap(new WeakHashMap<>());
+        private final Set<Descriptor<?>> views = Collections.newSetFromMap(new WeakHashMap<>());
 
         private Lifetime(String name) {
             this.name = name;
@@ -115,17 +118,47 @@ public final class UsbHostProxy {
         /** Caller holds the owning session monitor; admitted native calls keep local references. */
         private void end() {
             active = false;
-            for (Device view : views) view.usbDevice = null;
+            for (Descriptor<?> view : views) view.value = null;
             views.clear();
+        }
+    }
+
+    /**
+     * Java-owned reference to one original framework descriptor. JNI retains the
+     * enclosing view, never this value directly. The session monitor guards admission
+     * and registration; an admitted getter keeps a local reference until it returns.
+     */
+    private static final class Descriptor<T> {
+        final Session owner;
+        final Lifetime lifetime;
+        T value;
+
+        Descriptor(Session owner, Lifetime lifetime, T value) {
+            this.owner = owner;
+            this.lifetime = lifetime;
+            synchronized (owner) {
+                if (owner.active && lifetime.isAlive()) {
+                    this.value = value;
+                    lifetime.views.add(this);
+                }
+            }
+        }
+
+        T get() {
+            synchronized (owner) {
+                owner.checkActive();
+                if (!lifetime.isAlive()) throw new IllegalStateException("USB device is detached");
+                return value;
+            }
         }
     }
 
     /** Framework view whose native reference ends with the observed device presence. */
     public static final class Device {
-        /** Session-guarded framework descriptor; cleared on detach or session disposal. */
-        UsbDevice usbDevice;
+        /** Cleared by Java even if Dart keeps its JNI reference to this view. */
+        private final Descriptor<UsbDevice> nativeDescriptor;
         /** Shared invalidation flag and immutable name/hash; contains no USB handles. */
-        public final Lifetime lifetime;
+        final Lifetime lifetime;
         /** Session used for dispatch and engine-lifecycle checks. */
         private final Session owner;
         /** Notification delivered, or consumed silently as initial Activity state; session-guarded. */
@@ -133,17 +166,36 @@ public final class UsbHostProxy {
 
         private Device(Session owner, UsbDevice device, Lifetime lifetime) {
             this.owner = owner;
-            this.usbDevice = device;
             this.lifetime = lifetime;
-            lifetime.views.add(this);
+            this.nativeDescriptor = new Descriptor<>(owner, lifetime, device);
         }
 
-        /** Returns a live descriptor; Dart owns the returned JNI reference until invalidation. */
-        public UsbDevice descriptor() {
-            synchronized (owner) {
-                owner.checkDevice(this);
-                return usbDevice;
-            }
+        /** Internal framework access; raw descriptors do not escape through JNI. */
+        UsbDevice descriptor() { return nativeDescriptor.get(); }
+
+        /** Name and equality/hash remain usable after invalidation. */
+        public String getDeviceName() { return lifetime.name; }
+        @Override public boolean equals(Object other) {
+            return other instanceof Device && lifetime.name.equals(((Device) other).lifetime.name);
+        }
+        @Override public int hashCode() { return lifetime.deviceHash; }
+
+        public int getDeviceId() { return descriptor().getDeviceId(); }
+        public int getDeviceClass() { return descriptor().getDeviceClass(); }
+        public int getDeviceSubclass() { return descriptor().getDeviceSubclass(); }
+        public int getDeviceProtocol() { return descriptor().getDeviceProtocol(); }
+        public int getVendorId() { return descriptor().getVendorId(); }
+        public int getProductId() { return descriptor().getProductId(); }
+        public String getManufacturerName() { return descriptor().getManufacturerName(); }
+        public String getProductName() { return descriptor().getProductName(); }
+        public String getVersion() { return descriptor().getVersion(); }
+        public int getConfigurationCount() { return descriptor().getConfigurationCount(); }
+        public int getInterfaceCount() { return descriptor().getInterfaceCount(); }
+        public Configuration getConfiguration(int index) {
+            return new Configuration(owner, lifetime, descriptor().getConfiguration(index));
+        }
+        public Interface getInterface(int index) {
+            return new Interface(owner, lifetime, descriptor().getInterface(index));
         }
 
         /** Reads serial on a worker, retaining a local reference only for the admitted call. */
@@ -153,6 +205,59 @@ public final class UsbHostProxy {
                 return descriptor.getSerialNumber();
             });
         }
+    }
+
+    /** Configuration view; validity and framework ownership remain in Java. */
+    public static final class Configuration {
+        private final Descriptor<UsbConfiguration> nativeDescriptor;
+        private Configuration(Session owner, Lifetime lifetime, UsbConfiguration configuration) {
+            nativeDescriptor = new Descriptor<>(owner, lifetime, configuration);
+        }
+        UsbConfiguration descriptor() { return nativeDescriptor.get(); }
+        public int getId() { return descriptor().getId(); }
+        public String getName() { return descriptor().getName(); }
+        public int getMaxPower() { return descriptor().getMaxPower(); }
+        public boolean isRemoteWakeup() { return descriptor().isRemoteWakeup(); }
+        public boolean isSelfPowered() { return descriptor().isSelfPowered(); }
+        public int getInterfaceCount() { return descriptor().getInterfaceCount(); }
+        public Interface getInterface(int index) {
+            return new Interface(nativeDescriptor.owner, nativeDescriptor.lifetime, descriptor().getInterface(index));
+        }
+    }
+
+    /** Interface/alternate-setting view; does not track claims or selected settings. */
+    public static final class Interface {
+        private final Descriptor<UsbInterface> nativeDescriptor;
+        private Interface(Session owner, Lifetime lifetime, UsbInterface intf) {
+            nativeDescriptor = new Descriptor<>(owner, lifetime, intf);
+        }
+        UsbInterface descriptor() { return nativeDescriptor.get(); }
+        public int getId() { return descriptor().getId(); }
+        public int getAlternateSetting() { return descriptor().getAlternateSetting(); }
+        public String getName() { return descriptor().getName(); }
+        public int getInterfaceClass() { return descriptor().getInterfaceClass(); }
+        public int getInterfaceSubclass() { return descriptor().getInterfaceSubclass(); }
+        public int getInterfaceProtocol() { return descriptor().getInterfaceProtocol(); }
+        public int getEndpointCount() { return descriptor().getEndpointCount(); }
+        public Endpoint getEndpoint(int index) {
+            return new Endpoint(nativeDescriptor.owner, nativeDescriptor.lifetime, descriptor().getEndpoint(index));
+        }
+    }
+
+    /** Endpoint descriptor view; contains no transfer or connection state. */
+    public static final class Endpoint {
+        private final Descriptor<UsbEndpoint> nativeDescriptor;
+        private Endpoint(Session owner, Lifetime lifetime, UsbEndpoint endpoint) {
+            nativeDescriptor = new Descriptor<>(owner, lifetime, endpoint);
+        }
+        UsbEndpoint descriptor() { return nativeDescriptor.get(); }
+        public int getAddress() { return descriptor().getAddress(); }
+        public int getAttributes() { return descriptor().getAttributes(); }
+        public int getDirection() { return descriptor().getDirection(); }
+        public int getEndpointNumber() { return descriptor().getEndpointNumber(); }
+        public int getInterval() { return descriptor().getInterval(); }
+        public int getMaxPacketSize() { return descriptor().getMaxPacketSize(); }
+        public int getType() { return descriptor().getType(); }
     }
 
     /**
@@ -214,7 +319,7 @@ public final class UsbHostProxy {
                             && pending.device.lifetime.isAlive()
                             && reply.getDeviceName().equals(pending.device.lifetime.name)
                             && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                            && manager.hasPermission(pending.device.usbDevice);
+                            && manager.hasPermission(pending.device.descriptor());
                         pending.finish(granted, null);
                     } catch (Throwable error) { pending.finish(null, error); }
                 }
@@ -271,7 +376,7 @@ public final class UsbHostProxy {
             String name = usbDevice.getDeviceName();
             Device previous = devices.get(name);
             // Reusing a view saves an allocation; it does not validate an attachment.
-            if (previous != null && previous.usbDevice == usbDevice) return previous;
+            if (previous != null && previous.descriptor() == usbDevice) return previous;
             Lifetime lifetime = previous == null ? new Lifetime(name) : previous.lifetime;
             Device device = new Device(this, usbDevice, lifetime);
             device.attachNotified = previous != null && previous.attachNotified;
@@ -295,14 +400,36 @@ public final class UsbHostProxy {
             missing.removeAll(found.keySet());
             for (String name : missing) removeDevice(name);
             ArrayList<Device> result = new ArrayList<>();
-            for (UsbDevice usbDevice : found.values()) result.add(remember(usbDevice));
+            for (UsbDevice usbDevice : found.values()) {
+                Device device = remember(usbDevice);
+                device.lifetime.exposed = true;
+                result.add(device);
+            }
             return result.toArray(new Device[0]);
+        }
+
+        /**
+         * Resolves delayed JNI event delivery in Java. Returning null means that the
+         * event is obsolete; Dart forwards this decision without its own registry.
+         * Discovery alone does not expose an attachment until enumeration or delivery.
+         */
+        public synchronized Device eventDevice(Device device, boolean detached) {
+            if (!active) return null;
+            if (device.owner != this) throw new IllegalArgumentException("Device belongs to another session");
+            if (detached) {
+                Device current = devices.get(device.lifetime.name);
+                if (current != null && current.lifetime != device.lifetime && current.lifetime.exposed) return null;
+            } else {
+                if (!device.lifetime.isAlive()) return null;
+                device.lifetime.exposed = true;
+            }
+            return device;
         }
 
         /** Returns Android's synchronous permission result for the supplied device view. */
         public synchronized boolean hasPermission(Device device) {
             checkDevice(device);
-            return manager.hasPermission(device.usbDevice);
+            return manager.hasPermission(device.descriptor());
         }
 
         /**
@@ -314,7 +441,7 @@ public final class UsbHostProxy {
             Call call = new Call(this, completion);
             try {
                 checkDevice(device);
-                if (manager.hasPermission(device.usbDevice)) { call.finish(true, null); return; }
+                if (manager.hasPermission(device.descriptor())) { call.finish(true, null); return; }
                 for (Permission permission : permissions.values()) {
                     if (permission.device.lifetime == device.lifetime) {
                         permission.waiters.add(call);
@@ -333,7 +460,7 @@ public final class UsbHostProxy {
                     UsbDevice descriptor;
                     synchronized (Session.this) {
                         if (!active || permissions.get(request) != permission) return;
-                        descriptor = device.usbDevice;
+                        descriptor = device.descriptor();
                     }
                     try {
                         manager.requestPermission(descriptor, pendingIntent);
@@ -369,7 +496,7 @@ public final class UsbHostProxy {
                                 return;
                             }
                             checkDevice(device);
-                            descriptor = device.usbDevice;
+                            descriptor = device.descriptor();
                         }
                         opened = manager.openDevice(descriptor);
                     } catch (Throwable error) { call.finish(null, error); return; }
@@ -618,6 +745,14 @@ public final class UsbHostProxy {
             if (closing || !deviceLifetime.isAlive()) throw new IllegalStateException("USB connection is closed or detached");
         }
 
+        /** Rejects an open result invalidated before Dart receives its callback. */
+        public void checkResult() {
+            synchronized (owner) {
+                owner.checkActive();
+                checkOpen();
+            }
+        }
+
         /** Returns the native descriptor without transferring ownership of it to the caller. */
         public int fileDescriptor() {
             checkOpen();
@@ -672,23 +807,43 @@ public final class UsbHostProxy {
         }
 
         /** Forwards claim/force without imposing descriptor-reference identity rules. */
-        public void claim(UsbInterface intf, boolean force, Completion completion) {
+        void claim(UsbInterface intf, boolean force, Completion completion) {
             submit(completion, () -> connection.claimInterface(intf, force));
         }
 
         /** Forwards release without requiring a prior claim or recording ownership history. */
-        public void release(UsbInterface intf, Completion completion) {
+        void release(UsbInterface intf, Completion completion) {
             submit(completion, () -> connection.releaseInterface(intf));
         }
 
         /** Forwards the alternate-setting request; Android decides whether it is allowed. */
-        public void selectInterface(UsbInterface intf, Completion completion) {
+        void selectInterface(UsbInterface intf, Completion completion) {
             submit(completion, () -> connection.setInterface(intf));
         }
 
         /** Forwards the configuration without scanning this device's descriptor references. */
-        public void selectConfiguration(UsbConfiguration configuration, Completion completion) {
+        void selectConfiguration(UsbConfiguration configuration, Completion completion) {
             submit(completion, () -> connection.setConfiguration(configuration));
+        }
+
+        /** Resolves a live Java view, without imposing descriptor-identity or claim rules. */
+        public void claimInterface(Interface intf, boolean force, Completion completion) {
+            claim(intf.descriptor(), force, completion);
+        }
+
+        /** Explicit release remains an Android decision, even without a prior claim. */
+        public void releaseInterface(Interface intf, Completion completion) {
+            release(intf.descriptor(), completion);
+        }
+
+        /** Forwards a live alternate-setting descriptor to Android. */
+        public void setInterface(Interface intf, Completion completion) {
+            selectInterface(intf.descriptor(), completion);
+        }
+
+        /** Forwards a live configuration descriptor to Android. */
+        public void setConfiguration(Configuration configuration, Completion completion) {
+            selectConfiguration(configuration.descriptor(), completion);
         }
 
         /**

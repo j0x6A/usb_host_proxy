@@ -12,7 +12,8 @@
 ///
 /// Observed device removal invalidates all related descriptor views and starts
 /// connection cleanup. Only a removed device's name, equality and hash remain
-/// available without JNI. The manager and event receivers stay active until
+/// available through inert Java views. JNI references to these views may remain
+/// until Dart GC. The manager and event receivers stay active until
 /// the engine session ends, including while the device list is empty.
 ///
 /// Java overloads share one Dart method with named optional arguments. Static

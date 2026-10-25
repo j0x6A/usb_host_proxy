@@ -46,10 +46,11 @@ class UsbManager {
   ///
   /// Device views and all their descendants are invalidated before notification;
   /// connection cleanup has started but may still be finishing admitted calls.
-  /// The payload retains only its name, equality and hash, without JNI handles.
+  /// The payload refers to an inert Java view: only its name, equality and hash
+  /// remain usable. Technical JNI references may stay until Dart GC.
   /// Cleanup does not require a subscriber. The manager remains usable when the
   /// device list becomes empty.
-  /// An old queued detach is not forwarded after a newer same-name device view
+  /// Java rejects an old queued detach after a newer same-name device view
   /// has already been exposed to Dart through enumeration or an attach event.
   Stream<UsbDevice> get deviceDetached => Platform.isAndroid
       ? AndroidUsb.instance.deviceDetached

@@ -270,6 +270,9 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       if (_current(selection) && check == _permissionVersion) {
         setState(() => _permission = null);
         _log('hasPermission failed: $error', _LogLevel.error);
+        // Java has rejected this view's lifecycle. A same-name replacement in
+        // the latest scan does not make the retained selection usable again.
+        if (error is StateError) _select(null);
       }
     } finally {
       if (_current(selection) && check == _permissionVersion) {
