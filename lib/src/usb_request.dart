@@ -5,9 +5,8 @@ import 'usb_endpoint.dart';
 
 /// A reusable asynchronous request for a bulk or interrupt endpoint.
 ///
-/// This class currently contains placeholders on every platform; no requests
-/// are submitted. Arguments and buffers are not inspected or retained, and
-/// calling [close] does not change subsequent placeholder results.
+/// Queued requests are unsupported on every platform. [initialize], [queue],
+/// and [cancel] return futures that fail with [UnsupportedError].
 class UsbRequest {
   /// Creates an uninitialized request, matching Android's public constructor.
   UsbRequest();
@@ -34,29 +33,26 @@ class UsbRequest {
 
   /// Initializes this request for [endpoint] on [connection].
   ///
-  /// NOT IMPLEMENTED YET: returns false without initializing the request.
+  /// The returned future fails with [UnsupportedError].
   Future<bool> initialize(
     UsbDeviceConnection connection,
     UsbEndpoint endpoint,
-  ) async {
-    return false;
-  }
+  ) async => throw UnsupportedError('USB request transport is not implemented');
 
   /// Queues the specified buffer slice; the future reports acceptance only.
   ///
   /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
   ///
-  /// NOT IMPLEMENTED YET: returns false without queuing or accessing the buffer.
-  Future<bool> queue(Uint8List? buffer, {int offset = 0, int? length}) async {
-    return false;
-  }
+  /// The returned future fails with [UnsupportedError] without accessing the
+  /// buffer.
+  Future<bool> queue(Uint8List? buffer, {int offset = 0, int? length}) async =>
+      throw UnsupportedError('USB request transport is not implemented');
 
   /// Requests cancellation of a queued operation; returns native acceptance.
   ///
-  /// NOT IMPLEMENTED YET: returns false without requesting cancellation.
-  Future<bool> cancel() async {
-    return false;
-  }
+  /// The returned future fails with [UnsupportedError].
+  Future<bool> cancel() async =>
+      throw UnsupportedError('USB request transport is not implemented');
 
   /// Releases request resources.
   ///

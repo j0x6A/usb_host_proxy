@@ -75,16 +75,16 @@ class UsbManager {
   Future<bool> hasPermission(UsbDevice device) async =>
       usbBackend.hasPermission(device);
 
-  /// Requests access and waits for the permission decision.
+  /// Requests access and waits for Android's decision for this request.
   ///
-  /// Concurrent requests for the same Android name share a decision. Denial or
-  /// detachment returns false. Session termination completes with an error.
-  /// No timeout is imposed and an already-authorized attachment completes true.
+  /// Each call requests permission independently from Android, including when
+  /// the app already has access. Denial or observed detach while waiting returns
+  /// false. Session termination completes pending requests with an error.
+  /// Requests have no timeout.
   /// Another engine's device or a foreign implementation fails before native access.
   /// Starting a new request with an invalidated device fails with [StateError].
-  /// A decision already completed by Java is preserved despite delayed delivery;
-  /// it does not guarantee the device is still present. A pending request cancelled
-  /// by detach resolves false.
+  /// A decision already completed by Java is preserved despite delayed delivery.
+  /// Use [hasPermission] to check current access.
   /// Other platforms currently return false without requesting anything.
   Future<bool> requestPermission(UsbDevice device) async =>
       usbBackend.requestPermission(device);

@@ -2327,9 +2327,9 @@ extension UsbHostProxy$Session$$Methods on UsbHostProxy$Session {
 
   /// from: `synchronized public void requestPermission(dev.jx6A78.usb_host_proxy.UsbHostProxy$Device device, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
   ///
-  /// Shares one pending Android permission decision per name, without a timeout.
-  ///Refusal or observed detach completes false; session disposal completes with an error.
-  ///Only submission to Android is dispatched to a worker; no worker waits for the reply.
+  /// Submits each call to Android with its own PendingIntent and callback.
+  ///Refusal or observed detach completes false. Session disposal completes with an error.
+  ///A worker submits the request and returns without waiting for the reply.
   void requestPermission(
     UsbHostProxy$Device? device,
     UsbHostProxy$Completion? completion,

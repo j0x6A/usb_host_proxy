@@ -1,6 +1,6 @@
 name: usb_host_proxy
 description: Android USB Host management and bulk and control transfers through JNI.
-version: 0.3.0
+version: 0.3.1
 publish_to: none
 
 environment:

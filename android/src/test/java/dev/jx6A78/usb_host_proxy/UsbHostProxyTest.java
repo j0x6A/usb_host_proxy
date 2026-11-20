@@ -754,27 +754,48 @@ public class UsbHostProxyTest {
         verify(nativeConnection).close();
     }
 
-    @Test public void permissionRequestsCoalesceAndReplyCompletesAllWaiters() throws Exception {
-        AtomicReference<PendingIntent> intent = new AtomicReference<>();
-        CountDownLatch requested = new CountDownLatch(1);
-        doAnswer(call -> { intent.set(call.getArgument(1)); requested.countDown(); return null; })
-            .when(manager).requestPermission(eq(usb), any(PendingIntent.class));
+    /** Returns the token submitted to Android, keeping the permission decision pending. */
+    private PendingIntent submitPermission(UsbHostProxy.Device view, Result result) throws InterruptedException {
+        LinkedBlockingQueue<PendingIntent> requests = new LinkedBlockingQueue<>();
+        doAnswer(call -> { requests.add(call.getArgument(1)); return null; })
+            .when(manager).requestPermission(same(view.descriptor()), any(PendingIntent.class));
+        session.requestPermission(view, result);
+        PendingIntent intent = requests.poll(10, TimeUnit.SECONDS);
+        assertNotNull("Permission request did not reach Android", intent);
+        return intent;
+    }
+
+    @Test public void sameDevicePermissionRequestsCompleteIndependentlyInReplyOrder() throws Exception {
         Result one = new Result();
         Result two = new Result();
-        session.requestPermission(device, one);
-        sameNameDevice();
+        PendingIntent first = submitPermission(device, one);
+        UsbDevice refreshedUsb = sameNameDevice();
         UsbHostProxy.Device refreshed = session.deviceList()[0];
         assertNotSame(device, refreshed);
-        session.requestPermission(refreshed, two);
-        assertTrue(requested.await(10, TimeUnit.SECONDS));
-        when(manager.hasPermission(usb)).thenReturn(true);
-        intent.get().send(context, 0, new Intent()
-            .putExtra(UsbManager.EXTRA_DEVICE, usb)
+        PendingIntent second = submitPermission(refreshed, two);
+        assertNotEquals(first, second);
+        assertNotEquals(shadowOf(first).getSavedIntent().getIntExtra("request", -1),
+            shadowOf(second).getSavedIntent().getIntExtra("request", -1));
+
+        // The grant reply is still valid if current access has changed by delivery.
+        when(manager.hasPermission(refreshedUsb)).thenReturn(false);
+        second.send(context, 0, new Intent()
+            .putExtra(UsbManager.EXTRA_DEVICE, refreshedUsb)
             .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
         shadowOf(Looper.getMainLooper()).idle();
-        assertEquals(true, one.await().value);
         assertEquals(true, two.await().value);
-        verify(manager, times(1)).requestPermission(eq(usb), any(PendingIntent.class));
+        assertFalse(session.hasPermission(refreshed));
+        assertEquals(1, one.done.getCount());
+        assertThrows(PendingIntent.CanceledException.class, () -> second.send());
+
+        first.send(context, 0, new Intent()
+            .putExtra(UsbManager.EXTRA_DEVICE, usb)
+            .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false));
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(false, one.await().value);
+        assertEquals(1, one.completions);
+        assertEquals(1, two.completions);
+        verify(manager, times(2)).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
     }
 
     @Test public void permissionRepliesUseDistinctRequestsWithoutDeviceInstanceTokens() throws Exception {
@@ -803,7 +824,6 @@ public class UsbHostProxyTest {
             .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true);
         assertFalse(reply.hasExtra("deviceInstance"));
         assertNotEquals(oldReply.getIntExtra("request", -1), reply.getIntExtra("request", -1));
-        when(manager.hasPermission(replacementUsb)).thenReturn(true);
 
         context.sendBroadcast(oldReply);
         shadowOf(Looper.getMainLooper()).idle();
@@ -819,26 +839,25 @@ public class UsbHostProxyTest {
         assertEquals(1, permission.completions);
     }
 
-    @Test public void detachResolvesPermissionFalseAndRejectsLateReply() throws Exception {
-        AtomicReference<PendingIntent> intent = new AtomicReference<>();
-        CountDownLatch requested = new CountDownLatch(1);
-        doAnswer(call -> { intent.set(call.getArgument(1)); requested.countDown(); return null; })
-            .when(manager).requestPermission(eq(usb), any(PendingIntent.class));
-        Result permission = new Result();
-        session.requestPermission(device, permission);
-        assertTrue(requested.await(10, TimeUnit.SECONDS));
+    @Test public void detachResolvesAllDevicePermissionRequestsFalseAndRejectsLateReply() throws Exception {
+        Result one = new Result();
+        Result two = new Result();
+        PendingIntent first = submitPermission(device, one);
+        PendingIntent second = submitPermission(device, two);
         // Model a reply already dispatched before cancellation of its PendingIntent.
-        Intent lateReply = new Intent(shadowOf(intent.get()).getSavedIntent())
+        Intent lateReply = new Intent(shadowOf(first).getSavedIntent())
             .putExtra(UsbManager.EXTRA_DEVICE, usb)
             .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true);
         detachDevice();
-        assertEquals(false, permission.await().value);
-        when(manager.hasPermission(usb)).thenReturn(true);
+        assertThrows(PendingIntent.CanceledException.class, () -> first.send());
+        assertThrows(PendingIntent.CanceledException.class, () -> second.send());
         context.sendBroadcast(lateReply);
         shadowOf(Looper.getMainLooper()).idle();
-        assertEquals(false, permission.value);
-        assertNull(permission.error);
-        assertEquals(1, permission.completions);
+        for (Result permission : new Result[] {one, two}) {
+            assertEquals(false, permission.await().value);
+            assertNull(permission.error);
+            assertEquals(1, permission.completions);
+        }
     }
 
     @Test public void deniedPermissionCompletesFalseWithoutAnError() throws Exception {
@@ -911,10 +930,17 @@ public class UsbHostProxyTest {
     }
 
     @Test public void sessionEndFailsPendingPermissionsAndInvalidatesOldSession() throws Exception {
-        Result permission = new Result();
-        session.requestPermission(device, permission);
+        Result one = new Result();
+        Result two = new Result();
+        PendingIntent first = submitPermission(device, one);
+        PendingIntent second = submitPermission(device, two);
         UsbHostProxy.detach(42);
-        assertTrue(permission.await().error instanceof IllegalStateException);
+        assertTrue(one.await().error instanceof IllegalStateException);
+        assertTrue(two.await().error instanceof IllegalStateException);
+        assertEquals(1, one.completions);
+        assertEquals(1, two.completions);
+        assertThrows(PendingIntent.CanceledException.class, () -> first.send());
+        assertThrows(PendingIntent.CanceledException.class, () -> second.send());
         assertThrows(IllegalStateException.class, session::deviceList);
         UsbHostProxy.attach(context, 42);
         assertNotSame(session, UsbHostProxy.session(42));
@@ -1051,26 +1077,39 @@ public class UsbHostProxyTest {
         verify(nativeConnection, times(1)).close();
     }
 
-    @Test public void authorizedDeviceViewsAreRejectedAfterDetachWithoutAnExtraDialog() throws Exception {
+    @Test public void authorizedDeviceStillRequestsPermissionAndItsDetachedViewIsRejected() throws Exception {
         when(manager.hasPermission(usb)).thenReturn(true);
         Result authorized = new Result();
-        session.requestPermission(device, authorized);
+        PendingIntent intent = submitPermission(device, authorized);
+        assertEquals(1, authorized.done.getCount());
+        intent.send(context, 0, new Intent()
+            .putExtra(UsbManager.EXTRA_DEVICE, usb)
+            .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
+        shadowOf(Looper.getMainLooper()).idle();
         assertEquals(true, authorized.await().value);
         assertNull(authorized.error);
         detachDevice();
         Result detached = new Result();
         session.requestPermission(device, detached);
         assertTrue(detached.await().error instanceof IllegalStateException);
-        verify(manager, times(1)).hasPermission(usb);
-        verify(manager, never()).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
+        verify(manager, never()).hasPermission(any(UsbDevice.class));
+        verify(manager, times(1)).requestPermission(any(UsbDevice.class), any(PendingIntent.class));
     }
 
-    @Test public void permissionSubmissionFailureRemainsAnErrorInsteadOfDenial() throws Exception {
+    @Test public void permissionSubmissionFailureOnlyFailsItsOwnCall() throws Exception {
+        Result pending = new Result();
+        PendingIntent first = submitPermission(device, pending);
         SecurityException denial = new SecurityException("permission submission failed");
         doThrow(denial).when(manager).requestPermission(eq(usb), any(PendingIntent.class));
         Result permission = new Result();
         session.requestPermission(device, permission);
         assertSame(denial, permission.await().error);
+        assertEquals(1, pending.done.getCount());
+        first.send(context, 0, new Intent()
+            .putExtra(UsbManager.EXTRA_DEVICE, usb)
+            .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(true, pending.await().value);
         assertEquals(1, permission.completions);
     }
 
@@ -1261,7 +1300,6 @@ public class UsbHostProxyTest {
             Intent secondIntent = shadowOf(two).getSavedIntent();
             assertEquals(firstIntent.getIntExtra("request", -1), secondIntent.getIntExtra("request", -1));
             assertNotEquals(firstIntent.getAction(), secondIntent.getAction());
-            when(manager.hasPermission(usb)).thenReturn(true);
             one.send(context, 0, new Intent().putExtra(UsbManager.EXTRA_DEVICE, usb)
                 .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
             shadowOf(Looper.getMainLooper()).idle();
@@ -1552,18 +1590,14 @@ public class UsbHostProxyTest {
         doAnswer(call -> { accepted.set(call.getArgument(1)); return null; })
             .when(manager).requestPermission(eq(usb), any(PendingIntent.class));
         Result retry = new Result();
-        Result shared = new Result();
         session.requestPermission(device, retry);
-        session.requestPermission(device, shared);
         assertEquals(1, tasks.size());
         tasks.remove().run();
-        when(manager.hasPermission(usb)).thenReturn(true);
         accepted.get().send(context, 0, new Intent()
             .putExtra(UsbManager.EXTRA_DEVICE, usb)
             .putExtra(UsbManager.EXTRA_PERMISSION_GRANTED, true));
         shadowOf(Looper.getMainLooper()).idle();
         assertEquals(true, retry.await().value);
-        assertEquals(true, shared.await().value);
         assertEquals(1, failed.completions);
         assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
         assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
@@ -1669,6 +1703,19 @@ public class UsbHostProxyTest {
         UsbDeviceConnection otherNative = mock(UsbDeviceConnection.class);
         when(manager.openDevice(usb)).thenReturn(otherNative);
         UsbHostProxy.Connection second = open();
+        CountDownLatch fallbackClosed = new CountDownLatch(1);
+        Thread lifecycleThread = Thread.currentThread();
+        AtomicReference<Thread> closingThread = new AtomicReference<>();
+        doAnswer(call -> {
+            closingThread.set(Thread.currentThread());
+            fallbackClosed.countDown();
+            return null;
+        }).when(nativeConnection).close();
+        doAnswer(call -> {
+            closingThread.set(Thread.currentThread());
+            fallbackClosed.countDown();
+            return null;
+        }).when(otherNative).close();
         UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
         session.listen(events);
         LinkedBlockingQueue<Runnable> tasks = holdWorkers();
@@ -1682,6 +1729,7 @@ public class UsbHostProxyTest {
             UsbHostProxy.detach(42);
             verify(events).disposed();
             verify(workers).shutdown();
+            assertTrue(((ExecutorService) getField(session, "closeFallback")).isShutdown());
             assertNull(getField(session, "events"));
             assertThrows(IllegalStateException.class, () -> UsbHostProxy.session(42));
             assertTrue(permission.await().error instanceof IllegalStateException);
@@ -1695,8 +1743,8 @@ public class UsbHostProxyTest {
         }
         assertFalse(device.lifetime.isAlive());
         assertNull(storedDescriptor(device));
-        verify(nativeConnection, never()).close();
-        verify(otherNative, never()).close(); // Rejection must never run close inline.
+        assertTrue(fallbackClosed.await(10, TimeUnit.SECONDS));
+        assertNotSame(lifecycleThread, closingThread.get());
         assertEquals(3, tasks.size()); // Serial, permission submission and one accepted close.
         assertTrue(ShadowLog.getLogsForTag("UsbHostProxy").stream()
             .anyMatch(item -> item.throwable == error));
@@ -1704,41 +1752,62 @@ public class UsbHostProxyTest {
         assertTrue(pending.await().error instanceof IllegalStateException);
         assertEquals(1, pending.completions);
         assertEquals(1, permission.completions);
-        assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
         assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
 
-        UsbHostProxy.Connection rejected = (Boolean) getField(first, "closed") ? second : first;
-        UsbHostProxy.Connection closed = rejected == first ? second : first;
-        UsbDeviceConnection rejectedNative = rejected == first ? nativeConnection : otherNative;
-        UsbDeviceConnection closedNative = rejected == first ? otherNative : nativeConnection;
-        assertFalse((Boolean) getField(rejected, "closing"));
-        assertFalse((Boolean) getField(rejected, "closed"));
-        assertSame(rejectedNative, getField(rejected, "connection"));
-        assertNull(getField(closed, "connection"));
-        verify(closedNative, times(1)).close();
-        verify(rejectedNative, never()).close();
-        assertThrows(IllegalStateException.class, rejected::fileDescriptor);
-
-        Result retry = new Result();
-        if (dispose) {
-            // A terminated pool cannot accept a retry; it must still report the error.
-            RejectedExecutionException ended = new RejectedExecutionException("pool shut down");
-            doThrow(ended).when(workers).execute(any(Runnable.class));
-            rejected.close(retry);
-            assertSame(ended, retry.await().error);
-            verify(rejectedNative, never()).close();
-        } else {
-            // Existing absence reconciliation can retry a close that was not submitted.
-            assertEquals(0, session.deviceList().length);
-            rejected.close(retry);
-            assertEquals(1, tasks.size());
-            tasks.remove().run();
-            assertNull(retry.await().error);
-            verify(rejectedNative, times(1)).close();
+        for (UsbHostProxy.Connection connection : new UsbHostProxy.Connection[] {first, second}) {
+            Result closed = new Result();
+            connection.close(closed);
+            assertNull(closed.await().error);
+            assertEquals(1, closed.completions);
+            assertNull(getField(connection, "connection"));
+            assertThrows(IllegalStateException.class, connection::fileDescriptor);
         }
-        assertEquals(1, retry.completions);
+        verify(nativeConnection, times(1)).close();
+        verify(otherNative, times(1)).close();
+        assertTrue(tasks.isEmpty());
+        assertTrue(((Set<?>) getField(session, "connections")).isEmpty());
         assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
         verifyNoMoreInteractions(events);
+    }
+
+    @Test public void rejectedDisposeClosesIdleConnectionWhileAnotherNativeCallIsRunning() throws Exception {
+        UsbHostProxy.Connection busy = open();
+        UsbDeviceConnection idleNative = mock(UsbDeviceConnection.class);
+        when(manager.openDevice(usb)).thenReturn(idleNative);
+        UsbHostProxy.Connection idle = open();
+        CountDownLatch readStarted = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        doAnswer(call -> {
+            readStarted.countDown();
+            assertTrue(releaseRead.await(10, TimeUnit.SECONDS));
+            return "serial";
+        }).when(nativeConnection).getSerial();
+        Result serial = new Result();
+        busy.serial(serial);
+        Result busyClosed = new Result();
+        ExecutorService fallback = getField(session, "closeFallback");
+        try {
+            assertTrue(readStarted.await(10, TimeUnit.SECONDS));
+            holdWorkers();
+            ExecutorService workers = getField(session, "workers");
+            doThrow(new OutOfMemoryError("simulated worker startup failure"))
+                .when(workers).execute(any(Runnable.class));
+            UsbHostProxy.detach(42);
+            assertTrue(serial.await().error instanceof IllegalStateException);
+            Result idleClosed = new Result();
+            idle.close(idleClosed);
+            assertNull(idleClosed.await().error);
+            verify(idleNative, times(1)).close();
+            verify(nativeConnection, never()).close();
+            assertFalse(fallback.isShutdown());
+            busy.close(busyClosed);
+            assertEquals(1, busyClosed.done.getCount());
+        } finally {
+            releaseRead.countDown();
+        }
+        assertNull(busyClosed.await().error);
+        verify(nativeConnection, times(1)).close();
+        assertTrue(fallback.awaitTermination(10, TimeUnit.SECONDS));
     }
 
     @Test public void workerStartupErrorsAlsoSettleAllFiveSubmissionPaths() throws Exception {

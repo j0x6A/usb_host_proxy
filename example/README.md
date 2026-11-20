@@ -66,8 +66,10 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    explicitly requests a USB permission decision; enumeration/selection never does.
    False means no access was obtained; the API does not distinguish refusal from detach.
 4. **Open** requires a selected, authorized device. **Read FD / raw descriptors**
-   reads connection information, not an extra control transfer. The file
-   descriptor remains owned by the plugin; do not close or use it externally.
+   reads connection information without issuing an extra control transfer.
+   Native code can borrow the file descriptor while the connection is open.
+   The connection owns the descriptor and closes it during cleanup. Callers
+   must coordinate native use with close and detach.
    Raw bytes are shown as hex (at most 256 displayed bytes, with total length).
 5. Choose an interface descriptor and use **Claim** / **Release**. **Force claim**
    defaults OFF and is passed unchanged; ON does not guarantee success. Selecting

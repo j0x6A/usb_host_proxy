@@ -25,7 +25,10 @@ abstract class UsbDeviceConnection {
   // Android USB host API.
 
   /// Returns the Android native file descriptor.
-  /// Ownership stays with this connection; the integer is invalid after close.
+  ///
+  /// Native code can borrow the descriptor while this connection is open.
+  /// This connection owns the descriptor and closes it during cleanup. Callers
+  /// must coordinate native use with close and detach.
   Future<int> getFileDescriptor();
 
   /// Returns the raw USB descriptors.

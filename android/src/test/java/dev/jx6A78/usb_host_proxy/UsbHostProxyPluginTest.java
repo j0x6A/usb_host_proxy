@@ -115,6 +115,7 @@ public class UsbHostProxyPluginTest {
     }
 
     @Test public void restartDisposesTheOldSessionAndCreatesAFreshOne() {
+        plugin.onAttachedToActivity(activityBinding(usbIntent()));
         UsbHostProxy.Session old = UsbHostProxy.session(ENGINE_ID);
         UsbHostProxy.Device device = old.deviceList()[0];
         UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
@@ -130,6 +131,10 @@ public class UsbHostProxyPluginTest {
         UsbHostProxy.Session replacement = UsbHostProxy.session(ENGINE_ID);
         assertNotSame(old, replacement);
         assertNotSame(device, replacement.deviceList()[0]);
+        UsbHostProxy.Events replacementEvents = mock(UsbHostProxy.Events.class);
+        replacement.listen(replacementEvents);
+        broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        verifyNoInteractions(replacementEvents);
         verify(engine, times(1)).addEngineLifecycleListener(plugin);
     }
 
@@ -166,10 +171,10 @@ public class UsbHostProxyPluginTest {
 
     @Test public void initialUsbIntentIsSilentAndSharesIdentityWithEnumerationAndBroadcast() {
         UsbHostProxy.Session session = UsbHostProxy.session(ENGINE_ID);
-        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
-        session.listen(events);
         ActivityPluginBinding activity = activityBinding(usbIntent());
         plugin.onAttachedToActivity(activity);
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
         UsbHostProxy.Device device = session.deviceList()[0];
         assertSame(usb, device.descriptor());
         verifyNoInteractions(events);
@@ -177,6 +182,23 @@ public class UsbHostProxyPluginTest {
         assertTrue(listener(activity).onNewIntent(usbIntent()));
         assertSame(device, session.deviceList()[0]);
         verifyNoInteractions(events);
+    }
+
+    @Test public void activityLaunchWithUsbIntentKeepsAttachForAnAlreadyListeningSession() {
+        devices.clear();
+        UsbHostProxy.Session session = UsbHostProxy.session(ENGINE_ID);
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        devices.put(usb.getDeviceName(), usb);
+
+        ActivityPluginBinding activity = activityBinding(usbIntent());
+        plugin.onAttachedToActivity(activity);
+        verifyNoInteractions(events);
+
+        broadcast(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        assertTrue(listener(activity).onNewIntent(usbIntent()));
+        verify(events).attached(session.deviceList()[0]);
+        verifyNoMoreInteractions(events);
     }
 
     @Test public void newUsbIntentThenBroadcastReportsOnlyOneAttach() {
@@ -294,6 +316,34 @@ public class UsbHostProxyPluginTest {
         verifyNoInteractions(events);
         plugin.onDetachedFromActivity();
         verify(second).removeOnNewIntentListener(any(NewIntentListener.class));
+    }
+
+    @Test public void recreatedActivityWithStaleIntentKeepsAttachForAReplacementWithTheSameName() {
+        plugin.onAttachedToActivity(activityBinding(usbIntent()));
+        UsbHostProxy.Session session = UsbHostProxy.session(ENGINE_ID);
+        UsbHostProxy.Device original = session.deviceList()[0];
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        devices.clear();
+        broadcast(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        verify(events).detached(original);
+
+        plugin.onDetachedFromActivityForConfigChanges();
+        UsbDevice replacementUsb = mock(UsbDevice.class);
+        String name = usb.getDeviceName();
+        when(replacementUsb.getDeviceName()).thenReturn(name);
+        devices.put(replacementUsb.getDeviceName(), replacementUsb);
+        plugin.onReattachedToActivityForConfigChanges(activityBinding(usbIntent()));
+        verifyNoMoreInteractions(events);
+
+        context.sendBroadcast(new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                .putExtra(UsbManager.EXTRA_DEVICE, replacementUsb));
+        shadowOf(Looper.getMainLooper()).idle();
+        UsbHostProxy.Device replacement = session.deviceList()[0];
+        assertNotSame(original, replacement);
+        assertSame(replacementUsb, replacement.descriptor());
+        verify(events).attached(replacement);
+        verifyNoMoreInteractions(events);
     }
 
     @Test public void activityDetachLeavesBroadcastsWorkingInTheHeadlessSession() {

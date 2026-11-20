@@ -25,6 +25,9 @@ import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -161,7 +164,7 @@ public final class UsbHostProxy {
         final Lifetime lifetime;
         /** Session used for dispatch and engine-lifecycle checks. */
         private final Session owner;
-        /** Notification delivered, or consumed silently as initial Activity state; session-guarded. */
+        /** Notification handled or consumed during startup; session-guarded. */
         private boolean attachNotified = false;
 
         private Device(Session owner, UsbDevice device, Lifetime lifetime) {
@@ -276,13 +279,16 @@ public final class UsbHostProxy {
         private final String permissionAction;
         /** Session-level work such as opening, device serial reads and permission submission. */
         private final ExecutorService workers = Executors.newCachedThreadPool();
+        /** Already running when the regular pool cannot start a lifecycle close. */
+        private final ThreadPoolExecutor closeFallback = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
         /** Last observed device views by Android name, used for event bookkeeping only. */
         private final Map<String, Device> devices = new HashMap<>();
         /** Published connections, retained until their worker close finishes. */
         private final Set<Connection> connections = new HashSet<>();
         /** Unsettled callbacks, including operations not yet admitted to native access. */
         private final Set<Call> calls = new HashSet<>();
-        /** Request code to a permission decision, coalesced by Android device name. */
+        /** One entry per outstanding Android permission request, keyed by request code. */
         private final Map<Integer, Permission> permissions = new HashMap<>();
         /** Source of request codes used by this session's PendingIntents. */
         private int nextPermission = 0;
@@ -318,8 +324,7 @@ public final class UsbHostProxy {
                         boolean granted = reply != null
                             && pending.device.lifetime.isAlive()
                             && reply.getDeviceName().equals(pending.device.lifetime.name)
-                            && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                            && manager.hasPermission(pending.device.descriptor());
+                            && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
                         pending.finish(granted, null);
                     } catch (Throwable error) { pending.finish(null, error); }
                 }
@@ -339,15 +344,17 @@ public final class UsbHostProxy {
                 context.registerReceiver(usbReceiver, usbFilter);
             }
             try {
+                closeFallback.prestartCoreThread();
                 IntentFilter permissionFilter = new IntentFilter(permissionAction);
                 if (Build.VERSION.SDK_INT >= 33) {
                     context.registerReceiver(permissionReceiver, permissionFilter, Context.RECEIVER_NOT_EXPORTED);
                 } else {
                     context.registerReceiver(permissionReceiver, permissionFilter);
                 }
-            } catch (RuntimeException error) {
-                context.unregisterReceiver(usbReceiver);
+            } catch (RuntimeException | Error error) {
+                closeFallback.shutdown();
                 workers.shutdown();
+                context.unregisterReceiver(usbReceiver);
                 throw error;
             }
         }
@@ -433,21 +440,14 @@ public final class UsbHostProxy {
         }
 
         /**
-         * Shares one pending Android permission decision per name, without a timeout.
-         * Refusal or observed detach completes false; session disposal completes with an error.
-         * Only submission to Android is dispatched to a worker; no worker waits for the reply.
+         * Submits each call to Android with its own PendingIntent and callback.
+         * Refusal or observed detach completes false. Session disposal completes with an error.
+         * A worker submits the request and returns without waiting for the reply.
          */
         public synchronized void requestPermission(Device device, Completion completion) {
             Call call = new Call(this, completion);
             try {
                 checkDevice(device);
-                if (manager.hasPermission(device.descriptor())) { call.finish(true, null); return; }
-                for (Permission permission : permissions.values()) {
-                    if (permission.device.lifetime == device.lifetime) {
-                        permission.waiters.add(call);
-                        return;
-                    }
-                }
                 int request = ++nextPermission;
                 Intent intent = new Intent(permissionAction).setPackage(context.getPackageName());
                 intent.putExtra("request", request);
@@ -542,7 +542,7 @@ public final class UsbHostProxy {
 
         /**
          * Accepts only a USB attach action with a readable UsbDevice payload.
-         * Initial Activity state consumes attach silently; later deliveries may notify.
+         * A stored Activity intent is silent; a runtime intent may notify.
          * True means the payload was recognized, even if live reconciliation finds it stale.
          * Neither form opens a device, requests permission nor trusts the payload as live state.
          */
@@ -563,7 +563,7 @@ public final class UsbHostProxy {
         /**
          * Reconciles a name hint using one notification flag for Activity and broadcast paths.
          * notify controls attach delivery only: observed absence still removes a known name.
-         * Silent initial delivery consumes the notification without synthesizing an event.
+         * Stored Activity state consumes the notification only before the session has a listener.
          */
         private synchronized void onAttached(UsbDevice usbDevice, boolean notify) {
             if (!active) return;
@@ -576,7 +576,7 @@ public final class UsbHostProxy {
                 return;
             }
             Device device = remember(present);
-            if (device.attachNotified) return;
+            if (device.attachNotified || (!notify && events != null)) return;
             device.attachNotified = true;
             if (notify && events != null) {
                 try { events.attached(device); }
@@ -643,6 +643,15 @@ public final class UsbHostProxy {
                 catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
             }
             workers.shutdown();
+            shutdownCloseFallbackIfReady();
+        }
+
+        /** Caller holds the monitor after disposal has scheduled all closes. */
+        private void shutdownCloseFallbackIfReady() {
+            for (Connection connection : connections) {
+                if (connection.deferredClose) return;
+            }
+            closeFallback.shutdown();
         }
     }
 
@@ -652,27 +661,24 @@ public final class UsbHostProxy {
         return intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
     }
 
-    /** One Android permission request shared by callers of the same Android name. */
+    /** Owns the reply token and callback for one Android permission request. */
     private static final class Permission {
         /** Supplied descriptor view; only its Android name correlates device events. */
         final Device device;
         /** Android reply token, cancelled when the decision is settled. */
         final PendingIntent intent;
-        /** Callbacks waiting for this decision; accessed under the owning session. */
-        final ArrayList<Call> waiters = new ArrayList<>();
+        final Call call;
 
-        /** Starts a decision with its first waiting call. */
-        Permission(Device device, PendingIntent intent, Call first) {
+        Permission(Device device, PendingIntent intent, Call call) {
             this.device = device;
             this.intent = intent;
-            waiters.add(first);
+            this.call = call;
         }
 
-        /** Cancels the reply token and settles all waiters under the session monitor. */
+        /** Cancels the reply token and settles its callback under the session monitor. */
         void finish(Object value, Throwable error) {
             intent.cancel();
-            for (Call call : waiters) call.finish(value, error);
-            waiters.clear();
+            call.finish(value, error);
         }
     }
 
@@ -735,6 +741,8 @@ public final class UsbHostProxy {
         private volatile boolean closing = false;
         /** Session-guarded completion of the native close attempt, including failure. */
         private boolean closed = false;
+        /** Set on submission failure until the last native reader can hand off the close. */
+        private volatile boolean deferredClose = false;
         /** Close callers awaiting the same close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
 
@@ -766,7 +774,7 @@ public final class UsbHostProxy {
             try {
                 checkOpen();
                 return connection.getFileDescriptor();
-            } finally { nativeLifetime.readLock().unlock(); }
+            } finally { releaseNativeRead(); }
         }
 
         /** Reads Android's raw descriptor bytes while excluding native close; may return null. */
@@ -776,7 +784,7 @@ public final class UsbHostProxy {
             try {
                 checkOpen();
                 return connection.getRawDescriptors();
-            } finally { nativeLifetime.readLock().unlock(); }
+            } finally { releaseNativeRead(); }
         }
 
         /**
@@ -801,7 +809,7 @@ public final class UsbHostProxy {
                                     checkOpen();
                                 }
                                 value = operation.call();
-                            } finally { nativeLifetime.readLock().unlock(); }
+                            } finally { releaseNativeRead(); }
                             call.finish(value, null);
                         } catch (Throwable error) { call.finish(null, error); }
                     });
@@ -872,32 +880,68 @@ public final class UsbHostProxy {
                 if (closing) return;
                 closing = true;
                 try {
-                    owner.workers.execute(() -> {
-                        Throwable error = null;
-                        nativeLifetime.writeLock().lock();
-                        try {
-                            connection.close();
-                        } catch (Throwable failure) { error = failure; }
-                        finally {
-                            connection = null;
-                            nativeLifetime.writeLock().unlock();
-                        }
-                        synchronized (owner) {
-                            closed = true;
-                            owner.connections.remove(this);
-                            if (error != null) Log.w("UsbHostProxy", "USB connection close failed", error);
-                            for (Call waiter : closeWaiters) waiter.finish(null, error);
-                            closeWaiters.clear();
-                        }
-                    });
+                    owner.workers.execute(this::closeNative);
                 } catch (Throwable error) {
-                    // Native close never started. Retain the handle and allow another submission.
-                    ArrayList<Call> waiters = new ArrayList<>(closeWaiters);
-                    closeWaiters.clear();
-                    closing = false;
                     Log.w("UsbHostProxy", "USB connection close submission failed", error);
-                    for (Call waiter : waiters) waiter.finish(null, error);
+                    if (completion == null) {
+                        deferredClose = true;
+                        dispatchDeferredClose();
+                    } else {
+                        failCloseSubmission(error);
+                    }
                 }
+            }
+        }
+
+        private void releaseNativeRead() {
+            nativeLifetime.readLock().unlock();
+            if (deferredClose) {
+                synchronized (owner) {
+                    dispatchDeferredClose();
+                    if (!owner.active) owner.shutdownCloseFallbackIfReady();
+                }
+            }
+        }
+
+        /**
+         * Under the session monitor. Keep the fallback available for other connections
+         * while this one still has admitted work.
+         */
+        private void dispatchDeferredClose() {
+            if (!deferredClose || nativeLifetime.getReadLockCount() != 0) return;
+            deferredClose = false;
+            try {
+                owner.closeFallback.execute(this::closeNative);
+            } catch (Throwable error) {
+                Log.w("UsbHostProxy", "USB connection fallback close submission failed", error);
+                failCloseSubmission(error);
+            }
+        }
+
+        /** Retains the native handle when neither execution nor cleanup has started. */
+        private void failCloseSubmission(Throwable error) {
+            ArrayList<Call> waiters = new ArrayList<>(closeWaiters);
+            closeWaiters.clear();
+            closing = false;
+            for (Call waiter : waiters) waiter.finish(null, error);
+        }
+
+        private void closeNative() {
+            Throwable error = null;
+            nativeLifetime.writeLock().lock();
+            try {
+                connection.close();
+            } catch (Throwable failure) { error = failure; }
+            finally {
+                connection = null;
+                nativeLifetime.writeLock().unlock();
+            }
+            synchronized (owner) {
+                closed = true;
+                owner.connections.remove(this);
+                if (error != null) Log.w("UsbHostProxy", "USB connection close failed", error);
+                for (Call waiter : closeWaiters) waiter.finish(null, error);
+                closeWaiters.clear();
             }
         }
     }
