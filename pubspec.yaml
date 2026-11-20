@@ -1,0 +1,24 @@
+name: usb_host_proxy
+description: Android USB Host management and bulk and control transfers through JNI.
+version: 0.3.0
+publish_to: none
+
+environment:
+  sdk: '>=3.13.5 <4.0.0'
+  flutter: '>=3.47.7'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  jni: ^1.1.0
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  jnigen: ^1.0.1
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: dev.jx6A78.usb_host_proxy
+        pluginClass: UsbHostProxyPlugin

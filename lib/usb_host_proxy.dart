@@ -1,0 +1,39 @@
+/// USB Host device discovery, management, and bulk and control transfers for Android.
+///
+/// Android operations and device events use JNI. Queued [UsbRequest] operations
+/// and the Windows backend remain unimplemented.
+///
+/// Android USB Host classes and protocol constants are represented without
+/// UsbAccessory. Management workers handle opening, serial reads, interface and
+/// configuration changes, and close. Enumeration, permission checks, descriptor
+/// getters and FD/raw reads still call JNI synchronously. Events use streams;
+/// requestPermission returns the decision instead of exposing a PendingIntent.
+///
+/// Observed device removal invalidates all related descriptor views and starts
+/// connection cleanup. Only a removed device's name, equality and hash remain
+/// available through inert Java views. JNI references to these views may remain
+/// until Dart GC. The manager and event receivers stay active until
+/// the engine session ends, including while the device list is empty.
+///
+/// Java overloads share one Dart method with named optional arguments. Static
+/// UsbDevice name/ID conversions use getDeviceIdFromName/getDeviceNameFromId
+/// because their Android names are already used by instance methods in Dart.
+/// Bulk and control transfers run on session workers and operate on Uint8List
+/// slices. An IN transfer copies the received prefix into the caller's view.
+///
+/// Android Parcelable members (CREATOR, describeContents, writeToParcel and
+/// inherited parcel flags) are not part of this cross-platform API.
+///
+/// References:
+/// https://developer.android.com/reference/android/hardware/usb/package-summary
+/// https://learn.microsoft.com/en-us/windows/win32/api/winusb/
+library;
+
+export 'src/usb_configuration.dart' show UsbConfiguration;
+export 'src/usb_constants.dart' show UsbConstants;
+export 'src/usb_device.dart' show UsbDevice;
+export 'src/usb_device_connection.dart' show UsbDeviceConnection;
+export 'src/usb_endpoint.dart' show UsbEndpoint;
+export 'src/usb_interface.dart' show UsbInterface;
+export 'src/usb_manager.dart' show UsbManager;
+export 'src/usb_request.dart' show UsbRequest;

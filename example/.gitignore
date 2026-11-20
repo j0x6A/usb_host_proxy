@@ -1,0 +1,9 @@
+# Other shared rules are inherited from the repository root.
+/doc/api/
+/migrate_working_dir/
+.widget_preview/
+app.*.symbols
+app.*.map.json
+/android/app/debug/
+/android/app/profile/
+/android/app/release/
