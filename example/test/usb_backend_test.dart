@@ -3,11 +3,10 @@ import 'dart:isolate';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:usb_host_proxy/src/android/android_usb.dart';
-import 'package:usb_host_proxy/src/usb_backend.dart';
 import 'package:usb_host_proxy/usb_host_proxy.dart';
 
 void main() {
-  group('Unimplemented platform backend', () {
+  group('Non-Android fallbacks', () {
     test(
       'managers preserve empty streams and independent mutable lists',
       () async {
@@ -42,10 +41,10 @@ void main() {
   }, skip: Platform.isAndroid);
 
   test(
-    'obtaining the Android backend does not initialise JNI or a session',
+    'obtaining the Android implementation does not initialise JNI or a session',
     () {
-      final UsbBackend backend = AndroidUsb.instance;
-      expect(identical(backend, AndroidUsb.instance), isTrue);
+      final android = AndroidUsb.instance;
+      expect(identical(android, AndroidUsb.instance), isTrue);
     },
   );
 
@@ -53,13 +52,13 @@ void main() {
     final outcomes = await Isolate.run(() async {
       // Construction must succeed even here. Actual USB access still rejects
       // a background isolate before it can create any JNI callback or reference.
-      final backend = AndroidUsb.instance;
+      final android = AndroidUsb.instance;
       final device = _UnusedDevice();
       final operations = <Future<Object?> Function()>[
-        backend.getDeviceList,
-        () => backend.hasPermission(device),
-        () => backend.requestPermission(device),
-        () => backend.openDevice(device),
+        android.getDeviceList,
+        () => android.hasPermission(device),
+        () => android.requestPermission(device),
+        () => android.openDevice(device),
       ];
       final results = <String>[];
       for (final operation in operations) {
@@ -78,8 +77,8 @@ void main() {
         }
       }
       for (final stream in [
-        () => backend.deviceAttached,
-        () => backend.deviceDetached,
+        () => android.deviceAttached,
+        () => android.deviceDetached,
       ]) {
         try {
           stream();

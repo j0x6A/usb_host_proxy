@@ -6,18 +6,22 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.hardware.usb.UsbConfiguration;
+import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbRequest;
 import android.os.BadParcelableException;
 import android.os.Build;
 import android.util.Log;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -25,13 +29,13 @@ import java.util.WeakHashMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
 /**
- * Android USB host management, bulk and control transfers exposed to Dart through JNIgen.
+ * Android USB host management and transfers exposed to Dart through JNIgen.
  *
  * <p>Framework USB objects remain the source of descriptor data. This class adds
  * engine ownership, permission callbacks, name-based events and native lifetime protection.
@@ -45,9 +49,14 @@ public final class UsbHostProxy {
     private static final Map<Long, Session> sessions = new HashMap<>();
 
     /** Replaces an engine's previous session, settling its work before registration. */
-    static synchronized void attach(Context context, long engineId) {
+    static void attach(Context context, long engineId) {
+        attach(context, engineId, UsbRequest::new);
+    }
+
+    /** The factory also permits testing below JNI without using an actual USB device. */
+    static synchronized void attach(Context context, long engineId, Supplier<UsbRequest> requestFactory) {
         detach(engineId);
-        sessions.put(engineId, new Session(context.getApplicationContext()));
+        sessions.put(engineId, new Session(context.getApplicationContext(), requestFactory));
     }
 
     /** Ends the registered session, if any; repeated calls are harmless. */
@@ -89,8 +98,10 @@ public final class UsbHostProxy {
     public interface Events {
         /** Reports the current attachment once for an accepted attach notification. */
         void attached(Device device);
-        /** Reports a removed name after cancelling pending access and scheduling close. */
+        /** Reports a removed name after invalidation and scheduling close. */
         void detached(Device device);
+        /** Releases the Dart state of one submission whose completion will not be delivered. */
+        void requestDiscarded(long token);
         /** Ends this session's event stream; does not represent physical detach. */
         void disposed();
     }
@@ -275,13 +286,11 @@ public final class UsbHostProxy {
         private final Context context;
         /** Android service used for discovery, permission decisions and opening. */
         private final UsbManager manager;
+        private final Supplier<UsbRequest> requestFactory;
         /** Unique permission callback route for this session, not a USB identity. */
         private final String permissionAction;
-        /** Session-level work such as opening, device serial reads and permission submission. */
+        /** Asynchronous USB operations and connection closes owned by this session. */
         private final ExecutorService workers = Executors.newCachedThreadPool();
-        /** Already running when the regular pool cannot start a lifecycle close. */
-        private final ThreadPoolExecutor closeFallback = new ThreadPoolExecutor(
-            1, 1, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>());
         /** Last observed device views by Android name, used for event bookkeeping only. */
         private final Map<String, Device> devices = new HashMap<>();
         /** Published connections, retained until their worker close finishes. */
@@ -332,9 +341,10 @@ public final class UsbHostProxy {
         };
 
         /** Registers both receivers; rolls back USB registration if permission setup fails. */
-        private Session(Context context) {
+        private Session(Context context, Supplier<UsbRequest> requestFactory) {
             this.context = context;
             this.manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
+            this.requestFactory = requestFactory;
             this.permissionAction = context.getPackageName() + ".USB_PERMISSION." + UUID.randomUUID();
             IntentFilter usbFilter = new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED);
             usbFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
@@ -344,7 +354,6 @@ public final class UsbHostProxy {
                 context.registerReceiver(usbReceiver, usbFilter);
             }
             try {
-                closeFallback.prestartCoreThread();
                 IntentFilter permissionFilter = new IntentFilter(permissionAction);
                 if (Build.VERSION.SDK_INT >= 33) {
                     context.registerReceiver(permissionReceiver, permissionFilter, Context.RECEIVER_NOT_EXPORTED);
@@ -352,7 +361,6 @@ public final class UsbHostProxy {
                     context.registerReceiver(permissionReceiver, permissionFilter);
                 }
             } catch (RuntimeException | Error error) {
-                closeFallback.shutdown();
                 workers.shutdown();
                 context.unregisterReceiver(usbReceiver);
                 throw error;
@@ -398,10 +406,11 @@ public final class UsbHostProxy {
          */
         public synchronized Device[] deviceList() {
             checkActive();
+            if (manager == null) return new Device[0];
             Map<String, UsbDevice> found = manager.getDeviceList();
             // Reconcile resource owners as well as the latest descriptor views.
             Set<String> missing = new HashSet<>(devices.keySet());
-            for (Connection connection : connections) missing.add(connection.deviceName);
+            for (Connection connection : connections) missing.add(connection.deviceLifetime.name);
             for (Permission permission : permissions.values()) missing.add(permission.device.lifetime.name);
             for (Call call : calls) if (call.openingName != null) missing.add(call.openingName);
             missing.removeAll(found.keySet());
@@ -566,7 +575,7 @@ public final class UsbHostProxy {
          * Stored Activity state consumes the notification only before the session has a listener.
          */
         private synchronized void onAttached(UsbDevice usbDevice, boolean notify) {
-            if (!active) return;
+            if (!active || manager == null) return;
             String name = usbDevice.getDeviceName();
             // A queued attach may already be obsolete. Use the live framework object,
             // not the event payload or a descriptor fingerprint, for a new wrapper.
@@ -610,7 +619,7 @@ public final class UsbHostProxy {
                 if (name.equals(call.openingName)) call.openingName = null;
             }
             for (Connection connection : new ArrayList<>(connections)) {
-                if (connection.deviceName.equals(name)) {
+                if (connection.deviceLifetime.name.equals(name)) {
                     connection.deviceLifetime.end();
                     connection.close(null);
                 }
@@ -643,15 +652,6 @@ public final class UsbHostProxy {
                 catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
             }
             workers.shutdown();
-            shutdownCloseFallbackIfReady();
-        }
-
-        /** Caller holds the monitor after disposal has scheduled all closes. */
-        private void shutdownCloseFallbackIfReady() {
-            for (Connection connection : connections) {
-                if (connection.deferredClose) return;
-            }
-            closeFallback.shutdown();
         }
     }
 
@@ -698,19 +698,172 @@ public final class UsbHostProxy {
             owner.calls.add(this);
         }
 
-        /** Removes and delivers the callback once; errors from a dead listener are logged. */
-        void finish(Object value, Throwable error) {
+        /** Returns whether the listener was invoked without a runtime exception. */
+        boolean finish(Object value, Throwable error) {
             synchronized (owner) {
-                if (completion == null) return;
+                if (completion == null) return false;
                 Completion target = completion;
                 completion = null;
                 owner.calls.remove(this);
                 try {
                     if (error == null) target.success(value); else target.failure(error);
+                    return true;
                 } catch (RuntimeException callbackError) {
                     // The engine may have already destroyed its Dart isolate.
                     Log.w("UsbHostProxy", "USB callback unavailable", callbackError);
+                    return false;
                 }
+            }
+        }
+    }
+
+    /** Private buffer and callback route for one queue attempt, even across session disposal. */
+    private static final class Transfer {
+        final long token;
+        final ByteBuffer buffer;
+        private final Events listener;
+
+        Transfer(long token, byte[] bytes, Events listener) {
+            this.token = token;
+            this.buffer = bytes == null ? null : ByteBuffer.wrap(bytes);
+            this.listener = listener;
+        }
+
+        void discard() {
+            if (listener == null) return;
+            try { listener.requestDiscarded(token); }
+            catch (RuntimeException error) { Log.w("UsbHostProxy", "USB listener unavailable", error); }
+        }
+    }
+
+    /** Snapshot of a specific completion. No operation can reuse its array. */
+    public static final class RequestResult {
+        private final Transfer transfer;
+        public final int length;
+        public final byte[] data;
+
+        private RequestResult(Transfer transfer, boolean input) {
+            this.transfer = transfer;
+            this.length = transfer.buffer == null ? 0 : transfer.buffer.position();
+            this.data = input && length > 0 ? transfer.buffer.array() : null;
+        }
+
+        public long token() { return transfer.token; }
+    }
+
+    /** One initialized framework handle. The connection owns it until native cleanup. */
+    public static final class Request {
+        private final Connection connection;
+        public final boolean input;
+        private volatile UsbRequest request;
+        // Transitions hold this monitor under shared native access, or hold exclusive native access.
+        // Close admission reads the snapshot.
+        private volatile Transfer pending;
+
+        private Request(Connection connection, UsbRequest request, boolean input) {
+            this.connection = connection;
+            this.request = request;
+            this.input = input;
+        }
+
+        public boolean isOpen() {
+            return request != null && !connection.closing && connection.deviceLifetime.isAlive();
+        }
+
+        public void queue(byte[] bytes, long token, Completion completion) {
+            Session session = connection.owner;
+            synchronized (session) {
+                // A synchronous failure here means the Dart caller still owns this submission.
+                session.checkActive();
+                Transfer transfer = new Transfer(token, bytes, session.events);
+                connection.submit(completion, () -> {
+                    boolean accepted = queueNative(transfer);
+                    if (!accepted) transfer.discard();
+                    return accepted;
+                }, true, transfer::discard);
+            }
+        }
+
+        private synchronized boolean queueNative(Transfer transfer) {
+            if (request == null) throw new IllegalStateException("USB request is closed");
+            if (pending != null) throw new IllegalStateException("USB request is already queued");
+            // Close visits this request under the same lock, including a queue already in progress.
+            connection.checkOpen();
+            if (!request.queue(transfer.buffer)) return false;
+            synchronized (connection.requests) {
+                pending = transfer;
+                connection.unreceived++;
+                connection.requests.notifyAll();
+            }
+            return true;
+        }
+
+        /** Called only after Android has removed the completion from the connection. */
+        private synchronized Transfer takePending() {
+            Transfer transfer = pending;
+            if (transfer == null) throw new IllegalStateException("USB request has no pending transfer");
+            pending = null;
+            return transfer;
+        }
+
+        public void cancel(Completion completion) {
+            if (request == null) {
+                completion.success(false);
+                return;
+            }
+            connection.submit(completion, this::cancelNative);
+        }
+
+        private synchronized boolean cancelNative() {
+            return request != null && request.cancel();
+        }
+
+        private synchronized void cancelPending() {
+            if (pending != null) request.cancel();
+        }
+
+        public void close(Completion completion) {
+            // In particular, fail without waiting behind connection close for a queued request.
+            checkIdle();
+            if (request == null) {
+                completion.success(null);
+                return;
+            }
+            connection.submit(completion, () -> {
+                closeIdle();
+                return null;
+            }, false, null);
+        }
+
+        private void checkIdle() {
+            if (pending != null) {
+                throw new IllegalStateException("Receive the queued USB request before closing or reinitializing it");
+            }
+        }
+
+        private synchronized void closeIdle() {
+            checkIdle();
+            release(true);
+        }
+
+        /**
+         * Caller holds exclusive nativeLifetime, or shared nativeLifetime and this monitor.
+         * Freeing an unreaped handle requires a closed connection.
+         */
+        private void release(boolean closeHandle) {
+            UsbRequest handle = request;
+            if (handle == null) return;
+            Transfer transfer = pending;
+            try {
+                if (closeHandle) handle.close();
+            } finally {
+                request = null;
+                pending = null;
+                synchronized (connection.requests) {
+                    connection.requests.remove(handle);
+                    if (transfer != null) connection.unreceived--;
+                }
+                if (transfer != null) transfer.discard();
             }
         }
     }
@@ -731,18 +884,20 @@ public final class UsbHostProxy {
         private final Session owner;
         /** Shared device validity; close remains available after it ends. */
         private final Lifetime deviceLifetime;
-        /** Name used to close this particular native connection when Android reports detach. */
-        private final String deviceName;
         /** Shared native access for operations; exclusive access for native close. */
         private final ReentrantReadWriteLock nativeLifetime = new ReentrantReadWriteLock();
         /** Original native connection; accessed only under the lifetime lock. */
         private UsbDeviceConnection connection;
+        /** Guarded by its own monitor, or exclusively by the native lifetime write lock. */
+        private final Map<UsbRequest, Request> requests = new IdentityHashMap<>();
+        /** Accepted transfers not yet accounted for as received, guarded like requests. */
+        private int unreceived;
+        /** Each native receiver reserves one of the unreceived transfers, guarded by requests. */
+        private int nativeReceivers;
         /** Set under the session monitor; volatile so direct reads reject close immediately. */
         private volatile boolean closing = false;
         /** Session-guarded completion of the native close attempt, including failure. */
         private boolean closed = false;
-        /** Set on submission failure until the last native reader can hand off the close. */
-        private volatile boolean deferredClose = false;
         /** Close callers awaiting the same close result; session-monitor guarded. */
         private final ArrayList<Call> closeWaiters = new ArrayList<>();
 
@@ -750,7 +905,6 @@ public final class UsbHostProxy {
         private Connection(Session owner, Lifetime lifetime, UsbDeviceConnection connection) {
             this.owner = owner;
             this.deviceLifetime = lifetime;
-            this.deviceName = lifetime.name;
             this.connection = connection;
         }
 
@@ -774,7 +928,7 @@ public final class UsbHostProxy {
             try {
                 checkOpen();
                 return connection.getFileDescriptor();
-            } finally { releaseNativeRead(); }
+            } finally { nativeLifetime.readLock().unlock(); }
         }
 
         /** Reads Android's raw descriptor bytes while excluding native close; may return null. */
@@ -784,7 +938,7 @@ public final class UsbHostProxy {
             try {
                 checkOpen();
                 return connection.getRawDescriptors();
-            } finally { releaseNativeRead(); }
+            } finally { nativeLifetime.readLock().unlock(); }
         }
 
         /**
@@ -794,26 +948,42 @@ public final class UsbHostProxy {
          * admitted native calls finish before native close can acquire exclusive access.
          */
         private void submit(Completion completion, Callable<Object> operation) {
+            submit(completion, operation, true, null);
+        }
+
+        /** Failure cleanup belongs to the worker, even if session disposal settled its callback. */
+        private void submit(Completion completion, Callable<Object> operation,
+                boolean requiresOpen, Runnable onFailure) {
             synchronized (owner) {
                 Call call = new Call(owner, completion);
-                if (closing) { call.finish(null, new IllegalStateException("USB connection is closed or detached")); return; }
                 try {
+                    if (requiresOpen && closing) throw new IllegalStateException("USB connection is closed or detached");
+                    owner.checkActive();
                     owner.workers.execute(() -> {
+                        Object value;
                         try {
-                            checkOpen();
-                            Object value;
+                            if (requiresOpen) checkOpen();
                             nativeLifetime.readLock().lock();
                             try {
                                 synchronized (owner) {
                                     owner.checkActive();
-                                    checkOpen();
+                                    if (requiresOpen) checkOpen();
                                 }
                                 value = operation.call();
-                            } finally { releaseNativeRead(); }
-                            call.finish(value, null);
-                        } catch (Throwable error) { call.finish(null, error); }
+                            } finally { nativeLifetime.readLock().unlock(); }
+                        } catch (Throwable error) {
+                            if (onFailure != null) onFailure.run();
+                            call.finish(null, error);
+                            return;
+                        }
+                        if (!call.finish(value, null) && value instanceof RequestResult result) {
+                            result.transfer.discard();
+                        }
                     });
-                } catch (Throwable error) { call.finish(null, error); }
+                } catch (Throwable error) {
+                    if (onFailure != null) onFailure.run();
+                    call.finish(null, error);
+                }
             }
         }
 
@@ -861,6 +1031,83 @@ public final class UsbHostProxy {
                     timeout));
         }
 
+        /** Only a successful framework initialization publishes an owned request. */
+        public void initializeRequest(Endpoint endpoint, Completion completion) {
+            UsbEndpoint descriptor = endpoint.descriptor();
+            submit(completion, () -> {
+                boolean input = descriptor.getDirection() == UsbConstants.USB_DIR_IN;
+                UsbRequest handle = owner.requestFactory.get();
+                try {
+                    if (handle.initialize(connection, descriptor)) {
+                        Request request = new Request(this, handle, input);
+                        synchronized (requests) { requests.put(handle, request); }
+                        return request;
+                    }
+                } catch (Throwable error) {
+                    try { handle.close(); }
+                    catch (Throwable failure) { recordCloseFailure(error, failure); }
+                    throw error;
+                }
+                handle.close();
+                return null;
+            });
+        }
+
+        /** A timeout of -1 is the JNI representation of Dart's indefinite wait. */
+        public void requestWait(long timeout, Completion completion) {
+            if (timeout < -1) throw new IllegalArgumentException("Invalid USB wait timeout");
+            submit(completion, () -> waitNative(timeout));
+        }
+
+        private long reserveReceiver(long timeout) throws InterruptedException, TimeoutException {
+            synchronized (requests) {
+                checkOpen();
+                long started = System.nanoTime();
+                long remaining = timeout;
+                while (nativeReceivers >= unreceived) {
+                    if (remaining == 0) throw new TimeoutException();
+                    requests.wait(remaining < 0 ? 0 : remaining);
+                    checkOpen();
+                    if (timeout > 0) {
+                        remaining = timeout - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                        if (remaining <= 0) throw new TimeoutException();
+                    }
+                }
+                nativeReceivers++;
+                return remaining;
+            }
+        }
+
+        private RequestResult waitNative(long timeout) throws InterruptedException, TimeoutException {
+            long remaining = reserveReceiver(timeout);
+            Transfer transfer = null;
+            try {
+                UsbRequest completed = remaining < 0 ? connection.requestWait() : connection.requestWait(remaining);
+                if (completed == null) return null;
+                Request request = findRequest(completed);
+                transfer = request.takePending();
+                try { return new RequestResult(transfer, request.input); }
+                catch (Throwable error) {
+                    transfer.discard();
+                    throw error;
+                }
+            } finally {
+                synchronized (requests) {
+                    // A timeout or native error releases the reservation but leaves the transfer owned.
+                    if (transfer != null) unreceived--;
+                    nativeReceivers--;
+                    requests.notifyAll();
+                }
+            }
+        }
+
+        private Request findRequest(UsbRequest handle) {
+            Request request;
+            synchronized (requests) { request = requests.get(handle); }
+            if (request == null) throw new IllegalStateException("Android returned an unknown USB request");
+            return request;
+        }
+
         /**
          * Rejects pending/new work and dispatches one close to the session worker pool.
          * Native close waits only for admitted native calls, without FIFO ordering.
@@ -872,66 +1119,56 @@ public final class UsbHostProxy {
          */
         public void close(Completion completion) {
             synchronized (owner) {
-                if (completion != null) {
-                    Call call = new Call(owner, completion);
-                    if (closed) { call.finish(null, null); return; }
-                    closeWaiters.add(call);
+                Call call = completion == null ? null : new Call(owner, completion);
+                if (closed) {
+                    if (call != null) call.finish(null, null);
+                    return;
                 }
-                if (closing) return;
-                closing = true;
-                try {
-                    owner.workers.execute(this::closeNative);
-                } catch (Throwable error) {
-                    Log.w("UsbHostProxy", "USB connection close submission failed", error);
-                    if (completion == null) {
-                        deferredClose = true;
-                        dispatchDeferredClose();
-                    } else {
-                        failCloseSubmission(error);
+                if (!closing) {
+                    closing = true;
+                    try {
+                        owner.workers.execute(this::cancelAndClose);
+                    } catch (Throwable error) {
+                        closing = false;
+                        Log.w("UsbHostProxy", "USB connection close submission failed", error);
+                        if (call != null) call.finish(null, error);
+                        return;
+                    } finally {
+                        synchronized (requests) { requests.notifyAll(); }
                     }
                 }
+                // The worker takes the owner monitor before publishing the close result.
+                if (call != null) closeWaiters.add(call);
             }
         }
 
-        private void releaseNativeRead() {
-            nativeLifetime.readLock().unlock();
-            if (deferredClose) {
-                synchronized (owner) {
-                    dispatchDeferredClose();
-                    if (!owner.active) owner.shutdownCloseFallbackIfReady();
-                }
-            }
+        private void cancelAndClose() {
+            Throwable error;
+            try { error = cancelPending(); }
+            catch (Throwable failure) { error = failure; }
+            closeNative(error);
         }
 
-        /**
-         * Under the session monitor. Keep the fallback available for other connections
-         * while this one still has admitted work.
-         */
-        private void dispatchDeferredClose() {
-            if (!deferredClose || nativeLifetime.getReadLockCount() != 0) return;
-            deferredClose = false;
-            try {
-                owner.closeFallback.execute(this::closeNative);
-            } catch (Throwable error) {
-                Log.w("UsbHostProxy", "USB connection fallback close submission failed", error);
-                failCloseSubmission(error);
-            }
-        }
-
-        /** Retains the native handle when neither execution nor cleanup has started. */
-        private void failCloseSubmission(Throwable error) {
-            ArrayList<Call> waiters = new ArrayList<>(closeWaiters);
-            closeWaiters.clear();
-            closing = false;
-            for (Call waiter : waiters) waiter.finish(null, error);
-        }
-
-        private void closeNative() {
+        /** Attempts to cancel queued requests before close waits for native readers. */
+        private Throwable cancelPending() {
             Throwable error = null;
+            nativeLifetime.readLock().lock();
+            try {
+                ArrayList<Request> snapshot;
+                synchronized (requests) { snapshot = new ArrayList<>(requests.values()); }
+                for (Request request : snapshot) {
+                    try { request.cancelPending(); }
+                    catch (Throwable failure) { error = recordCloseFailure(error, failure); }
+                }
+            } finally { nativeLifetime.readLock().unlock(); }
+            return error;
+        }
+
+        private void closeNative(Throwable error) {
             nativeLifetime.writeLock().lock();
             try {
-                connection.close();
-            } catch (Throwable failure) { error = failure; }
+                error = closeResources(error);
+            } catch (Throwable failure) { error = recordCloseFailure(error, failure); }
             finally {
                 connection = null;
                 nativeLifetime.writeLock().unlock();
@@ -943,6 +1180,48 @@ public final class UsbHostProxy {
                 for (Call waiter : closeWaiters) waiter.finish(null, error);
                 closeWaiters.clear();
             }
+        }
+
+        /** Runs after every public native wait has left the connection. */
+        private Throwable closeResources(Throwable error) {
+            try {
+                while (unreceived > 0) {
+                    UsbRequest completed = connection.requestWait(0);
+                    if (completed == null) break;
+                    Transfer transfer = findRequest(completed).takePending();
+                    unreceived--;
+                    transfer.discard();
+                }
+            } catch (TimeoutException ignored) {
+                // No completion is available. Use the connection close for the remainder.
+            } catch (Throwable failure) { error = recordCloseFailure(error, failure); }
+
+            for (Request request : new ArrayList<>(requests.values())) {
+                if (request.pending != null) continue;
+                try { request.release(true); }
+                catch (Throwable failure) { error = recordCloseFailure(error, failure); }
+            }
+            boolean connectionClosed = false;
+            try {
+                connection.close();
+                connectionClosed = true;
+            } catch (Throwable failure) { error = recordCloseFailure(error, failure); }
+
+            if (!requests.isEmpty()) {
+                // Even after fd close, Android can retain its own JNI references for these requests.
+                Log.w("UsbHostProxy", "USB requests without a completion on close: " + requests.size());
+                for (Request request : new ArrayList<>(requests.values())) {
+                    try { request.release(connectionClosed); }
+                    catch (Throwable failure) { error = recordCloseFailure(error, failure); }
+                }
+            }
+            return error;
+        }
+
+        private static Throwable recordCloseFailure(Throwable previous, Throwable failure) {
+            if (previous == null) return failure;
+            if (previous != failure) previous.addSuppressed(failure);
+            return previous;
         }
     }
 }

@@ -10,11 +10,20 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbRequest;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Substitutes the Android framework objects below the real plugin and JNI bindings. */
 public final class TransferFixture {
@@ -22,6 +31,11 @@ public final class TransferFixture {
     private static volatile boolean present;
     private static volatile boolean entered;
     private static CountDownLatch resume;
+    private static final AtomicBoolean waitError = new AtomicBoolean();
+    private static final AtomicInteger untimedWaits = new AtomicInteger();
+    private static final Map<UsbDeviceConnection, LinkedBlockingDeque<Queued>> requests = new ConcurrentHashMap<>();
+
+    private record Queued(UsbRequest request, boolean input, ByteBuffer buffer) {}
 
     public static void install(long engineId) throws ReflectiveOperationException {
         Field field = UsbHostProxy.Session.class.getDeclaredField("context");
@@ -32,10 +46,12 @@ public final class TransferFixture {
         UsbInterface intf = mock(UsbInterface.class);
         UsbEndpoint in = mock(UsbEndpoint.class);
         UsbEndpoint out = mock(UsbEndpoint.class);
+        UsbEndpoint unsupported = mock(UsbEndpoint.class);
         when(device.getDeviceName()).thenReturn(NAME);
         when(device.getInterface(0)).thenReturn(intf);
         when(intf.getEndpoint(0)).thenReturn(in);
         when(intf.getEndpoint(1)).thenReturn(out);
+        when(intf.getEndpoint(2)).thenReturn(unsupported);
         when(in.getDirection()).thenReturn(0x80);
         when(manager.getDeviceList()).thenAnswer(call -> {
             HashMap<String, UsbDevice> devices = new HashMap<>();
@@ -48,22 +64,34 @@ public final class TransferFixture {
             @Override public Object getSystemService(String name) {
                 return Context.USB_SERVICE.equals(name) ? manager : super.getSystemService(name);
             }
-        }, engineId);
+        }, engineId, () -> request(in, out));
     }
 
     public static void prepare() {
         present = true;
         entered = false;
         resume = new CountDownLatch(1);
+        waitError.set(false);
+        untimedWaits.set(0);
     }
 
     public static void removeDevice() { present = false; }
     public static boolean transferEntered() { return entered; }
     public static void resumeTransfer() { resume.countDown(); }
+    public static void failNextWait() { waitError.set(true); }
+    public static int untimedWaitCount() { return untimedWaits.get(); }
     public static void dispose(long engineId) { UsbHostProxy.detach(engineId); }
 
-    private static UsbDeviceConnection connection(UsbEndpoint in, UsbEndpoint out) {
+    private static UsbDeviceConnection connection(UsbEndpoint in, UsbEndpoint out) throws TimeoutException {
         UsbDeviceConnection connection = mock(UsbDeviceConnection.class);
+        LinkedBlockingDeque<Queued> queue = new LinkedBlockingDeque<>();
+        requests.put(connection, queue);
+        when(connection.requestWait()).thenAnswer(call -> {
+            untimedWaits.incrementAndGet();
+            return receiveRequest(queue, null);
+        });
+        when(connection.requestWait(anyLong())).thenAnswer(call -> receiveRequest(queue, call.getArgument(0)));
+        doAnswer(call -> { requests.remove(connection); return null; }).when(connection).close();
         when(connection.bulkTransfer(any(), any(), anyInt(), anyInt(), anyInt())).thenAnswer(call -> {
             UsbEndpoint endpoint = call.getArgument(0);
             byte[] bytes = call.getArgument(1);
@@ -123,6 +151,54 @@ public final class TransferFixture {
             };
         });
         return connection;
+    }
+
+    private static UsbRequest receiveRequest(LinkedBlockingDeque<Queued> queue, Long timeout)
+            throws InterruptedException, TimeoutException {
+        if (waitError.getAndSet(false)) return null;
+        // Bound the untimed framework double so a regression cannot strand the fixture.
+        Queued completed = timeout == null ? queue.pollFirst(10, TimeUnit.SECONDS)
+                : queue.pollFirst(timeout, TimeUnit.MILLISECONDS);
+        if (completed == null) throw new TimeoutException();
+        ByteBuffer buffer = completed.buffer();
+        if (buffer != null && buffer.hasRemaining()) {
+            if (completed.input()) {
+                buffer.put((byte) 0x80);
+                if (buffer.hasRemaining()) buffer.put((byte) 0xff);
+                if (buffer.hasRemaining()) buffer.put(buffer.position(), (byte) 0x7f);
+            } else {
+                buffer.position(1);
+            }
+        }
+        return completed.request();
+    }
+
+    private static UsbRequest request(UsbEndpoint in, UsbEndpoint out) {
+        UsbRequest request = mock(UsbRequest.class);
+        AtomicReference<LinkedBlockingDeque<Queued>> queue = new AtomicReference<>();
+        AtomicBoolean input = new AtomicBoolean();
+        when(request.initialize(any(), any())).thenAnswer(call -> {
+            UsbEndpoint endpoint = call.getArgument(1);
+            if (endpoint != in && endpoint != out) return false;
+            input.set(endpoint == in);
+            queue.set(requests.get(call.getArgument(0)));
+            check(queue.get() != null);
+            return true;
+        });
+        when(request.queue(nullable(ByteBuffer.class))).thenAnswer(call -> {
+            ByteBuffer buffer = call.getArgument(0);
+            if (!input.get() && buffer != null && buffer.hasRemaining()) {
+                byte[] data = new byte[buffer.remaining()];
+                buffer.duplicate().get(data);
+                check(Arrays.equals(data, new byte[] {(byte) 0xfe, 0x51, 0x42}));
+            }
+            // Return later submissions first to exercise identity matching across endpoints.
+            queue.get().addFirst(new Queued(request, input.get(), buffer));
+            return true;
+        });
+        when(request.cancel()).thenAnswer(call ->
+            queue.get().stream().anyMatch(pending -> pending.request() == request));
+        return request;
     }
 
     private static int receive(byte[] buffer) {

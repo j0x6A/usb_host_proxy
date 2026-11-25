@@ -2,7 +2,8 @@
 
 A Flutter plugin for discovering and managing Android USB Host devices. It can
 read device information, request permission, open connections and manage USB
-interfaces. Open connections support bulk and control transfers.
+interfaces. Open connections support bulk and control transfers and queued bulk
+or interrupt requests.
 
 The Android implementation uses Java and JNI. JNI lets Dart call Android classes;
 JNIgen generates the private bindings for those calls. Dart objects retain
@@ -24,6 +25,7 @@ The Android backend implements the following operations.
 | Open/close connections | `openDevice()`, `UsbDeviceConnection.close()` |
 | Manage interfaces and settings | `claimInterface()`, `releaseInterface()`, `setInterface()`, `setConfiguration()` |
 | Transfer data | `UsbDeviceConnection.bulkTransfer()`, `UsbDeviceConnection.controlTransfer()` |
+| Queue and receive transfers | `UsbRequest`, `UsbDeviceConnection.requestWait()` |
 | Read connection information | `getFileDescriptor()`, `getRawDescriptors()`, `getSerial()` |
 | Read device serial or convert Android names/IDs | `getSerialNumber()`, `getDeviceIdFromName()`, `getDeviceNameFromId()` |
 | Receive device events | `deviceAttached`, `deviceDetached` streams |
@@ -32,10 +34,9 @@ This is the implemented scope, not a claim of complete hardware or test coverage
 Descriptor getters use Android's existing descriptors. Applications can issue
 additional descriptor requests explicitly through `controlTransfer()`.
 
-- `requestWait()` fails with `UnsupportedError` on Android.
-- On every platform, `UsbRequest.initialize()`, `queue()` and `cancel()` fail
-  with `UnsupportedError`. Its getters return null, and `setClientData()` and
-  `close()` do nothing.
+- On non-Android platforms, `UsbRequest.initialize()`, `queue()` and `cancel()`
+  fail with `UnsupportedError`. Its getters return null, and `setClientData()`
+  and `close()` do nothing.
 - The Windows backend is not implemented. WinUSB methods fail with
   `UnsupportedError` on Android; other platforms retain their placeholders.
 - `UsbAccessory` and Android Parcelable serialization are outside this API.
@@ -56,15 +57,16 @@ normally running your UI. Managers in that engine share one session; creating
 another manager does not create another registry.
 Additional Dart isolates are not supported.
 
-Platform selection is internal to the plugin. Name/ID conversion does not start
-a USB management session. Linux, Windows and other non-Android hosts retain the
-documented empty/false/null placeholders; routing does not add platform support.
+On Android, the public Dart classes call the Android implementation directly.
+Name/ID conversion does not start a USB management session. Linux, Windows and
+other non-Android hosts retain the documented fallback values.
 
 ## Basic workflow
 
 Import `package:usb_host_proxy/usb_host_proxy.dart`, then enumerate devices in an
 async UI action. Let the user choose one, check permission, then open it.
-The map keys are Android device names:
+The map keys are Android device names. If Android's USB service is unavailable,
+enumeration returns an empty map.
 
 ```dart
 final manager = UsbManager();
@@ -179,15 +181,80 @@ operations that other calls depend on. Enumeration, permission checks,
 descriptor getters and FD/raw reads call JNI synchronously.
 
 `close()` immediately rejects new connection operations and prevents pending
-work from starting native access. It waits only for calls already allowed to
-start, including direct information reads, then calls native close once without
-individual Release calls. It does not drain older worker tasks or wait for their
-Dart callback delivery. A transfer admitted with `timeout: 0` can therefore keep
-`close()` pending indefinitely if the device stops responding.
+work from starting native access. It wakes waiters for an available request and
+attempts to cancel queued transfers before waiting for native calls to return.
+It then receives available leftover completions and closes the native connection.
+A bulk or control transfer admitted with `timeout: 0` can keep `close()` pending
+indefinitely if the device stops responding.
 
 Repeated close is safe. Even if native close fails, that connection cannot be
 reused; the failure reaches callers awaiting that attempt and is not replayed to
 later close calls. Releasing a JNI reference is not a substitute for native close.
+
+## Queued bulk and interrupt transfers
+
+Claim the interface, then initialize one `UsbRequest` for each transfer you want
+outstanding. A successful `queue()` means Android accepted the transfer.
+`requestWait()` can return any completed request from that connection. It returns
+the original Dart object and updates its `transferredLength` before delivery.
+Read the length when the result returns. The property holds the most recent
+completion delivered for that object, including when the object has been reused.
+
+Queue slices use the same relative `offset` and optional `length` as bulk and
+control transfers. OUT snapshots the submitted slice. IN reserves a writable
+slice and copies back only the received prefix. The `queue()` buffer may also be
+null for a zero-length transfer.
+
+With an opened connection and a claimed interface, this example queues two
+reads and stores their received prefixes in completion order. The example closes
+the connection even when initialization, queueing or waiting fails.
+
+```dart
+final received = <Uint8List>[];
+try {
+  for (var i = 0; i < 2; i++) {
+    final request = UsbRequest();
+    final buffer = Uint8List(64);
+    request.setClientData(buffer);
+    if (!await request.initialize(connection, input) ||
+        !await request.queue(buffer)) {
+      throw StateError('Android could not submit the USB request');
+    }
+  }
+  for (var i = 0; i < 2; i++) {
+    final completed = await connection.requestWait(timeout: 1000);
+    if (completed == null) throw StateError('Android could not receive a request');
+    final buffer = completed.getClientData() as Uint8List;
+    received.add(Uint8List.sublistView(buffer, 0, completed.transferredLength!));
+    await completed.close();
+  }
+} finally {
+  await connection.close();
+}
+```
+
+Each native waiter reserves one outstanding transfer on the connection. A
+`timeout: 0` call checks immediately for an unreserved transfer and, if one
+exists, makes a single nonblocking Android call. A positive timeout includes
+the wait for a reservation. Android receives the remaining time in one call and
+defines the behavior for very large values. A timeout throws Dart
+`TimeoutException` and leaves outstanding transfers queued. An omitted timeout
+waits indefinitely until a completion, a native wait error (`null`) or connection
+shutdown.
+
+`UsbRequest.cancel()` returns false for an unbound request or a released handle.
+The plugin rejects `UsbRequest.close()` with `StateError` until an accepted
+transfer's completion is received, even after successful `cancel()`. To keep
+the connection open, receive the request before closing it. Reinitializing an
+idle request releases the previous handle first. After `initialize()` returns
+false, the plugin reports no binding through `getEndpoint()` and permits a retry.
+
+Connection close, observed detach and session disposal attempt to cancel and
+receive outstanding transfers before closing their handles. No wait from the
+application is required for connection cleanup. If Android never returns a
+completion, its framework can retain an internal JNI reference even after the
+plugin has released its own references. See the
+[Android backend guide](doc/android_backend.md#queued-bulk-and-interrupt-requests).
 
 ## Device events and cleanup
 
@@ -206,9 +273,9 @@ close has finished. Its payload refers to an inert Java view; use
 `getDeviceName()` for identification. Java cleans up without Dart stream
 subscribers. The manager and system
 event receivers remain active even when no devices are present.
-If a newer view of a same-name device has already reached Dart, a queued detach
-for the old view is rejected by Java before forwarding; it must not clear the newer
-selection or close the newer connection.
+Java drops a queued detach callback before Dart adds it to the stream if a
+newer same-name view has already been exposed. A subscription can still deliver
+a detach buffered before the newer view was exposed.
 
 A late native open result is closed before reporting the failed open. Session
 shutdown fails pending calls immediately and still cleans late results. Name
@@ -218,8 +285,8 @@ Already-admitted native calls retain local references until they return; close
 uses the existing connection lifetime lock before releasing native resources.
 The library releases references it owns; Android or the application may retain
 their own descriptor snapshots. It cannot erase caller-held Dart variables or
-copies of raw descriptor bytes/FD integers. Old wrappers are inert, and a copied
-FD no longer grants valid use after close. If no system event is received,
+copies of raw descriptor bytes or FD numbers. Copying the FD number leaves its
+lifetime tied to the connection. If no system event is received,
 absence is detected by the next enumeration; no polling mechanism is added.
 
 The plugin follows Android's events. Without additional Android information it
@@ -283,7 +350,7 @@ and [Activity launch modes](https://developer.android.com/guide/topics/manifest/
 | Resource ownership | Java tests check clearing every saved descriptor view, late child creation, event admission and native close. | Actual JNI finalization and cleanup on a device. |
 | Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
 | Bulk/control transfers | Robolectric checks parameters, results, errors and close/detach. Android integration tests exercise Dart slices, JNI callbacks and worker lifecycle with mocked USB objects. | Transfer behavior, actual timeouts and unplug during I/O on USB hardware. |
-| Queued requests | Tests check `UnsupportedError`, placeholder getters and no-op methods without native or buffer access. | Queued requests remain unimplemented. |
+| Queued requests | Robolectric checks concurrent waits, cancellation and cleanup order. Android integration tests cover object identity, buffer slices, reinitialization and close without a public wait. Desktop tests cover non-Android placeholders. | Real bulk and interrupt completions, cancellation and physical detach. |
 
 Robolectric runs against API 28, 31, 33 and 35. Desktop Flutter tests use fake
 public interfaces. The Android integration suite runs the Dart adapter,
@@ -291,21 +358,26 @@ generated bindings and production Java workers, with the framework USB objects
 substituted at the test boundary. The example includes a manual checklist for
 physical hardware.
 
-With dependencies and tooling already installed, run:
+From the root of a clean checkout with Flutter, a JDK and Android SDK Platform
+36 installed, run:
 
 ```powershell
-# Repository root
+flutter pub get
 flutter analyze --no-pub
 
-# example/
+cd example
+flutter pub get
 flutter test --no-pub
 flutter analyze --no-pub
+flutter build apk --debug --config-only --no-pub
 
-# example/android/
-.\gradlew.bat :usb_host_proxy:testDebugUnitTest --offline --console=plain --no-daemon
+cd android
+.\gradlew.bat :usb_host_proxy:testDebugUnitTest --console=plain --no-daemon
 ```
 
-The Java task needs cached dependencies in offline mode. See the
+Flutter's Android configuration step creates the local Gradle launcher scripts
+and wrapper JAR. On macOS or Linux, use `./gradlew` from `example/android/`.
+Add `--offline` only after the Gradle dependencies are cached. See the
 [example README](example/README.md#dartjni-transfer-tests) for the Android
 integration command and [hardware scenarios](example/README.md).
 

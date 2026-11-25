@@ -169,22 +169,34 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
     });
   }
 
-  /// Invalidates the selected name on detach, then requests a fresh public list.
+  /// Checks the retained selection on detach, then refreshes the device list.
   void _deviceEvent(UsbDevice device, {required bool attached}) {
     if (!_alive) return;
     try {
       final name = device.getDeviceName();
       _log('${attached ? 'Attached' : 'Detached'}: $name', _LogLevel.usbEvent);
       if (!attached) {
-        setState(() => _devices.remove(name));
-        // Public adapters are not identity tokens. Never compare Dart wrappers
-        // to correlate enumerations; a delivered detach invalidates this name.
-        if (_selectedName == name) _select(null);
+        if (_selectedName == name && _isDetached(_device)) _select(null);
+        if (_isDetached(_devices[name])) {
+          setState(() => _devices.remove(name));
+        }
       }
     } catch (error) {
       _log('USB event descriptor error: $error', _LogLevel.error);
     }
     unawaited(_refresh());
+  }
+
+  /// Java rejects descriptor reads on the removed attachment. A live view can
+  /// share its name, including when the cached and selected views differ.
+  bool _isDetached(UsbDevice? device) {
+    if (device == null) return false;
+    try {
+      device.getDeviceId();
+      return false;
+    } on StateError {
+      return true;
+    }
   }
 
   /// Latest scan wins; failure keeps the previous list visible with an error.
@@ -200,12 +212,12 @@ class _UsbDiagnosticsAppState extends State<UsbDiagnosticsApp> {
       final found = await widget.manager.getDeviceList();
       if (!_alive || scan != _scanVersion) return;
       setState(() => _devices = Map.of(found));
-      if (_selectedName != null && !found.containsKey(_selectedName)) {
+      // A replacement can reuse the name of an invalidated selection.
+      if (_selectedName != null &&
+          (!found.containsKey(_selectedName) || _isDetached(_device))) {
         _log('Selected device is no longer present', _LogLevel.info);
         _select(null);
       }
-      // Keep the selected descriptor view while its name stays present. New
-      // enumeration entries do not mutate previously obtained framework objects.
       if (_device != null && _idle) {
         unawaited(_checkPermission(_device!, _selectionVersion));
       }

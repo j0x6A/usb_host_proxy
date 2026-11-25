@@ -1,3 +1,22 @@
+## Unreleased
+
+- Add Android bulk and interrupt requests via `UsbRequest` and
+  `UsbDeviceConnection.requestWait()`, with per-submission results and cleanup
+  through the owning connection.
+- Remove the automatic retry when close submission fails during detach or
+  session disposal. The plugin logs the failure and explicit close can be
+  retried if the worker pool still accepts tasks.
+- Continue connection cleanup after cancellation errors and report those errors
+  to callers awaiting close. Closing an idle request after session disposal
+  reports `StateError` while its native handle is still present.
+- Return false from `UsbRequest.cancel()` on Android when the request is
+  unbound or its native handle has been released.
+- Keep discovery empty and ignore attach notifications when Android's USB
+  service is unavailable.
+- Clarify delayed detach delivery across same-name reattachment. The diagnostic
+  example clears an invalid selection on refresh even during an active operation
+  and without receiving the old detach event.
+
 ## 0.3.1
 
 - Submit each Android permission request independently and return Android's
@@ -31,7 +50,8 @@
   Activity recreation.
 - Provide an Android API 28+ diagnostic example. Cover Android lifecycle and
   operation contracts with Robolectric and diagnostic UI behavior with Flutter.
-- Reserve public API declarations for USB requests and Windows pipe operations.
+- Reserve public API declarations for USB requests and Windows pipe operations;
+  USB request transport implementation is added in Unreleased.
 
 ## 0.1.0
 

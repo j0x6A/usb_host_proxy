@@ -320,6 +320,97 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Same-name attach clears an invalid selection while Claim is pending',
+    (tester) async {
+      manager.onCheck = (device) async {
+        device.getDeviceId();
+        return true;
+      };
+      final claimed = Completer<bool>();
+      connection.onClaim = () => claimed.future;
+      await launch(tester);
+      await select(tester, 'A');
+      await press(tester, 'open');
+      await selectInterface(tester, 0);
+      await press(tester, 'claim');
+
+      // A fresh snapshot for a still-live selection must keep the connection.
+      manager.devices['A'] = FakeDevice('A');
+      await press(tester, 'refresh');
+      expect(find.text('Selected: A'), findsOneWidget);
+      expect(connection.closes, 0);
+
+      first.invalidated = true;
+      final replacement = FakeDevice('A');
+      manager.devices['A'] = replacement;
+      // Java may suppress the old detach after exposing the new attachment.
+      manager.attached.add(replacement);
+      await tester.pumpAndSettle();
+      expect(find.text('Running: Claim'), findsOneWidget);
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(find.text('Connection: Closed'), findsOneWidget);
+      expect(connection.closes, 1);
+      expect(deviceChoices(tester), unorderedEquals(['', 'A', 'B']));
+
+      claimed.complete(true);
+      await tester.pumpAndSettle();
+      expect(find.text('Claim interface 0: true'), findsNothing);
+      expect(connection.closes, 1);
+    },
+  );
+
+  testWidgets(
+    'Delayed detach preserves live selected and listed views at the same address',
+    (tester) async {
+      manager.permissions['A'] = true;
+      await launch(tester);
+      manager.devices.remove('A');
+      first.invalidated = true;
+      await press(tester, 'refresh');
+
+      final replacement = FakeDevice('A');
+      manager.devices['A'] = replacement;
+      await press(tester, 'refresh');
+      await select(tester, 'A');
+      await press(tester, 'open');
+
+      manager.detached.add(first);
+      await tester.pumpAndSettle();
+      expect(find.text('Selected: A'), findsOneWidget);
+      expect(find.text('Connection: Open'), findsOneWidget);
+      expect(connection.closes, 0);
+
+      final claimed = Completer<bool>();
+      connection.onClaim = () => claimed.future;
+      await selectInterface(tester, 0);
+      await press(tester, 'claim');
+      replacement.invalidated = true;
+      manager.devices['A'] = FakeDevice('A');
+      await press(tester, 'refresh');
+      manager.onScan = () async => throw StateError('USB service unavailable');
+      manager.detached.add(replacement);
+      await tester.pumpAndSettle();
+      expect(deviceChoices(tester), unorderedEquals(['', 'A', 'B']));
+      expect(find.text('No device selected'), findsOneWidget);
+      expect(connection.closes, 1);
+      claimed.complete(true);
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('Detach removes an invalid list entry even if refresh fails', (
+    tester,
+  ) async {
+    await launch(tester);
+    first.invalidated = true;
+    manager.onScan = () async => throw StateError('USB service unavailable');
+    manager.detached.add(first);
+    await tester.pumpAndSettle();
+    expect(deviceChoices(tester), ['', 'B']);
+    expect(find.textContaining('USB service unavailable'), findsWidgets);
+  });
+
   testWidgets('A permission service error does not imply device invalidation', (
     tester,
   ) async {
@@ -1367,6 +1458,8 @@ class FakeDevice implements UsbDevice {
   FakeDevice(this.name);
   final String name;
 
+  bool invalidated = false;
+
   /// Independent optional-string failure, leaving VID/PID readable.
   bool productError = false;
 
@@ -1392,7 +1485,11 @@ class FakeDevice implements UsbDevice {
   @override
   String getVersion() => '1.0';
   @override
-  int getDeviceId() => 1;
+  int getDeviceId() {
+    if (invalidated) throw StateError('USB device is detached');
+    return 1;
+  }
+
   @override
   int getDeviceClass() => 0;
   @override

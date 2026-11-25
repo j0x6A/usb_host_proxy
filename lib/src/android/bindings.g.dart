@@ -1527,9 +1527,28 @@ final class $IllegalArgumentException$Type$
   String get signature => r'Ljava/lang/IllegalArgumentException;';
 }
 
+/// from: `java.util.concurrent.TimeoutException`
+extension type TimeoutException._(jni$_.JObject _$this) implements Exception {
+  static final _class = jni$_.JClass.forName(
+    r'java/util/concurrent/TimeoutException',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<TimeoutException> type = $TimeoutException$Type$();
+}
+
+final class $TimeoutException$Type$ extends jni$_.JType<TimeoutException> {
+  @jni$_.internal
+  const $TimeoutException$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ljava/util/concurrent/TimeoutException;';
+}
+
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy`
 ///
-/// Android USB host management, bulk and control transfers exposed to Dart through JNIgen.
+/// Android USB host management and transfers exposed to Dart through JNIgen.
 ///
 ///Framework USB objects remain the source of descriptor data. This class adds
 ///engine ownership, permission callbacks, name-based events and native lifetime protection.
@@ -2082,6 +2101,90 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
     ).check();
   }
 
+  static final _id_initializeRequest = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'initializeRequest',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Endpoint;Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
+
+  static final _initializeRequest =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<
+                  (jni$_.Pointer<jni$_.Void>, jni$_.Pointer<jni$_.Void>)
+                >,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void initializeRequest(dev.jx6A78.usb_host_proxy.UsbHostProxy$Endpoint endpoint, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  ///
+  /// Only a successful framework initialization publishes an owned request.
+  void initializeRequest(
+    UsbHostProxy$Endpoint? endpoint,
+    UsbHostProxy$Completion? completion,
+  ) {
+    final _$$selfRef = reference;
+    final _$endpoint = endpoint?.reference ?? jni$_.jNullReference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _initializeRequest(
+      _$$selfRef.pointer,
+      _id_initializeRequest.pointer,
+      _$endpoint.pointer,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_requestWait = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'requestWait',
+        r'(JLdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
+
+  static final _requestWait =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int64, jni$_.Pointer<jni$_.Void>)>,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void requestWait(long timeout, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  ///
+  /// A timeout of -1 is the JNI representation of Dart's indefinite wait.
+  void requestWait(core$_.int timeout, UsbHostProxy$Completion? completion) {
+    final _$$selfRef = reference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _requestWait(
+      _$$selfRef.pointer,
+      _id_requestWait.pointer,
+      timeout,
+      _$completion.pointer,
+    ).check();
+  }
+
   static final _id_close = UsbHostProxy$Connection._class.instanceMethodId(
     r'close',
     r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
@@ -2130,6 +2233,254 @@ final class $UsbHostProxy$Connection$Type$
   @core$_.override
   String get signature =>
       r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Connection;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Request`
+///
+/// One initialized framework handle. The connection owns it until native cleanup.
+extension type UsbHostProxy$Request._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$Request',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$Request> type =
+      $UsbHostProxy$Request$Type$();
+}
+
+extension UsbHostProxy$Request$$Methods on UsbHostProxy$Request {
+  static final _id_input = UsbHostProxy$Request._class.instanceFieldId(
+    r'input',
+    r'Z',
+  );
+
+  /// from: `public final boolean input`
+  core$_.bool get input =>
+      _id_input.getNullable(this, jni$_.jboolean.type) as core$_.bool;
+
+  static final _id_get$isOpen = UsbHostProxy$Request._class.instanceMethodId(
+    r'isOpen',
+    r'()Z',
+  );
+
+  static final _get$isOpen =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallBooleanMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public boolean isOpen()`
+  core$_.bool get isOpen {
+    final _$$selfRef = reference;
+    return _get$isOpen(_$$selfRef.pointer, _id_get$isOpen.pointer).boolean;
+  }
+
+  static final _id_queue = UsbHostProxy$Request._class.instanceMethodId(
+    r'queue',
+    r'([BJLdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+  );
+
+  static final _queue =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<
+                  (
+                    jni$_.Pointer<jni$_.Void>,
+                    jni$_.Int64,
+                    jni$_.Pointer<jni$_.Void>,
+                  )
+                >,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+              core$_.int,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void queue(byte[] bytes, long token, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  void queue(
+    jni$_.JByteArray? bytes,
+    core$_.int token,
+    UsbHostProxy$Completion? completion,
+  ) {
+    final _$$selfRef = reference;
+    final _$bytes = bytes?.reference ?? jni$_.jNullReference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _queue(
+      _$$selfRef.pointer,
+      _id_queue.pointer,
+      _$bytes.pointer,
+      token,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_cancel = UsbHostProxy$Request._class.instanceMethodId(
+    r'cancel',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+  );
+
+  static final _cancel =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Pointer<jni$_.Void>,)>,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void cancel(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  void cancel(UsbHostProxy$Completion? completion) {
+    final _$$selfRef = reference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _cancel(
+      _$$selfRef.pointer,
+      _id_cancel.pointer,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_close = UsbHostProxy$Request._class.instanceMethodId(
+    r'close',
+    r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+  );
+
+  static final _close =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Pointer<jni$_.Void>,)>,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void close(dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  void close(UsbHostProxy$Completion? completion) {
+    final _$$selfRef = reference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _close(_$$selfRef.pointer, _id_close.pointer, _$completion.pointer).check();
+  }
+}
+
+final class $UsbHostProxy$Request$Type$
+    extends jni$_.JType<UsbHostProxy$Request> {
+  @jni$_.internal
+  const $UsbHostProxy$Request$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Request;';
+}
+
+/// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$RequestResult`
+///
+/// Snapshot of a specific completion. No operation can reuse its array.
+extension type UsbHostProxy$RequestResult._(jni$_.JObject _$this)
+    implements jni$_.JObject {
+  static final _class = jni$_.JClass.forName(
+    r'dev/jx6A78/usb_host_proxy/UsbHostProxy$RequestResult',
+  );
+
+  /// The type which includes information such as the signature of this class.
+  static const jni$_.JType<UsbHostProxy$RequestResult> type =
+      $UsbHostProxy$RequestResult$Type$();
+}
+
+extension UsbHostProxy$RequestResult$$Methods on UsbHostProxy$RequestResult {
+  static final _id_length = UsbHostProxy$RequestResult._class.instanceFieldId(
+    r'length',
+    r'I',
+  );
+
+  /// from: `public final int length`
+  core$_.int get length =>
+      _id_length.getNullable(this, jni$_.jint.type) as core$_.int;
+
+  static final _id_data = UsbHostProxy$RequestResult._class.instanceFieldId(
+    r'data',
+    r'[B',
+  );
+
+  /// from: `public final byte[] data`
+  /// The returned object must be released after use, by calling the [release] method.
+  jni$_.JByteArray? get data =>
+      _id_data.getNullable(this, jni$_.JByteArray.type) as jni$_.JByteArray?;
+
+  static final _id_token = UsbHostProxy$RequestResult._class.instanceMethodId(
+    r'token',
+    r'()J',
+  );
+
+  static final _token =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JniResult Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+              )
+            >
+          >('globalEnv_CallLongMethod')
+          .asFunction<
+            jni$_.JniResult Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+            )
+          >();
+
+  /// from: `public long token()`
+  core$_.int token() {
+    final _$$selfRef = reference;
+    return _token(_$$selfRef.pointer, _id_token.pointer).long;
+  }
+}
+
+final class $UsbHostProxy$RequestResult$Type$
+    extends jni$_.JType<UsbHostProxy$RequestResult> {
+  @jni$_.internal
+  const $UsbHostProxy$RequestResult$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature =>
+      r'Ldev/jx6A78/usb_host_proxy/UsbHostProxy$RequestResult;';
 }
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy$Session`
@@ -3689,6 +4040,12 @@ extension type UsbHostProxy$Events._(jni$_.JObject _$this)
         _$impls[$p]!.detached(($a![0] as UsbHostProxy$Device?));
         return jni$_.nullptr;
       }
+      if ($d == r'requestDiscarded(J)V') {
+        _$impls[$p]!.requestDiscarded(
+          ($a![0] as jni$_.JLong).toDartInt(releaseOriginal: true),
+        );
+        return jni$_.nullptr;
+      }
       if ($d == r'disposed()V') {
         _$impls[$p]!.disposed();
         return jni$_.nullptr;
@@ -3724,6 +4081,7 @@ extension type UsbHostProxy$Events._(jni$_.JObject _$this)
           r'attached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
         if ($impl.detached$async)
           r'detached(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Device;)V',
+        if ($impl.requestDiscarded$async) r'requestDiscarded(J)V',
         if ($impl.disposed$async) r'disposed()V',
       ],
     );
@@ -3811,6 +4169,39 @@ extension UsbHostProxy$Events$$Methods on UsbHostProxy$Events {
     ).check();
   }
 
+  static final _id_requestDiscarded = UsbHostProxy$Events._class
+      .instanceMethodId(r'requestDiscarded', r'(J)V');
+
+  static final _requestDiscarded =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<(jni$_.Int64,)>,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+            )
+          >();
+
+  /// from: `public abstract void requestDiscarded(long token)`
+  ///
+  /// Releases the Dart state of one submission whose completion will not be delivered.
+  void requestDiscarded(core$_.int token) {
+    final _$$selfRef = reference;
+    _requestDiscarded(
+      _$$selfRef.pointer,
+      _id_requestDiscarded.pointer,
+      token,
+    ).check();
+  }
+
   static final _id_disposed = UsbHostProxy$Events._class.instanceMethodId(
     r'disposed',
     r'()V',
@@ -3847,6 +4238,8 @@ abstract base mixin class $UsbHostProxy$Events {
     core$_.bool attached$async,
     required void Function(UsbHostProxy$Device? device) detached,
     core$_.bool detached$async,
+    required void Function(core$_.int token) requestDiscarded,
+    core$_.bool requestDiscarded$async,
     required void Function() disposed,
     core$_.bool disposed$async,
   }) = _$UsbHostProxy$Events;
@@ -3855,6 +4248,8 @@ abstract base mixin class $UsbHostProxy$Events {
   core$_.bool get attached$async => false;
   void detached(UsbHostProxy$Device? device);
   core$_.bool get detached$async => false;
+  void requestDiscarded(core$_.int token);
+  core$_.bool get requestDiscarded$async => false;
   void disposed();
   core$_.bool get disposed$async => false;
 }
@@ -3865,16 +4260,21 @@ final class _$UsbHostProxy$Events with $UsbHostProxy$Events {
     this.attached$async = false,
     required void Function(UsbHostProxy$Device? device) detached,
     this.detached$async = false,
+    required void Function(core$_.int token) requestDiscarded,
+    this.requestDiscarded$async = false,
     required void Function() disposed,
     this.disposed$async = false,
   }) : _attached = attached,
        _detached = detached,
+       _requestDiscarded = requestDiscarded,
        _disposed = disposed;
 
   final void Function(UsbHostProxy$Device? device) _attached;
   final core$_.bool attached$async;
   final void Function(UsbHostProxy$Device? device) _detached;
   final core$_.bool detached$async;
+  final void Function(core$_.int token) _requestDiscarded;
+  final core$_.bool requestDiscarded$async;
   final void Function() _disposed;
   final core$_.bool disposed$async;
 
@@ -3884,6 +4284,10 @@ final class _$UsbHostProxy$Events with $UsbHostProxy$Events {
 
   void detached(UsbHostProxy$Device? device) {
     return _detached(device);
+  }
+
+  void requestDiscarded(core$_.int token) {
+    return _requestDiscarded(token);
   }
 
   void disposed() {
@@ -4140,6 +4544,24 @@ final class $RuntimeException$Type$ extends jni$_.JType<RuntimeException> {
   @jni$_.internal
   @core$_.override
   String get signature => r'Ljava/lang/RuntimeException;';
+}
+
+/// from: `java.lang.Exception`
+///
+/// WARNING: Exception is a stub. To generate bindings for this class, include
+/// java.lang.Exception in your config's classes list.
+///
+extension type Exception._(jni$_.JObject _$this) implements jni$_.JObject {
+  static const jni$_.JType<Exception> type = $Exception$Type$();
+}
+
+final class $Exception$Type$ extends jni$_.JType<Exception> {
+  @jni$_.internal
+  const $Exception$Type$();
+
+  @jni$_.internal
+  @core$_.override
+  String get signature => r'Ljava/lang/Exception;';
 }
 
 /// from: `java.lang.Throwable`

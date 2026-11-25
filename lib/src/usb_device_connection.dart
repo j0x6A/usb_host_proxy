@@ -8,14 +8,14 @@ import 'usb_request.dart';
 
 /// A connection returned by `UsbManager.openDevice`.
 ///
-/// Android implements management, information, bulk and control operations
-/// through JNI. Queued requests and Windows pipe extensions are unsupported.
+/// Android implements management, information and transfers through JNI.
+/// Windows pipe extensions are unsupported.
 /// New implemented operations on a closed/detached Android connection fail with
 /// [StateError]. Results already completed by Java are preserved even if their
 /// Dart delivery occurs after detach. Unsupported members always fail with
 /// [UnsupportedError].
 ///
-/// Bulk/control transfers and connection changes use the session's shared
+/// Transfers and connection changes use the session's shared
 /// workers without FIFO ordering. Await results before submitting dependent
 /// operations. Interface/configuration arguments
 /// must be Android descriptor adapters. Their native references are forwarded
@@ -24,11 +24,16 @@ import 'usb_request.dart';
 abstract class UsbDeviceConnection {
   // Android USB host API.
 
-  /// Returns the Android native file descriptor.
+  /// Returns the borrowed Android file descriptor owned by this connection.
   ///
-  /// Native code can borrow the descriptor while this connection is open.
-  /// This connection owns the descriptor and closes it during cleanup. Callers
-  /// must coordinate native use with close and detach.
+  /// Leave closing the descriptor to the connection. Explicit close, device
+  /// detach, or engine shutdown can close it before the caller uses it or calls
+  /// `dup`. The OS can reuse the number after close. The caller owns and closes
+  /// any descriptor it successfully duplicates.
+  ///
+  /// The original descriptor and any `dup` copies share one usbfs completion
+  /// queue. Concurrent [UsbRequest] transfers and native asynchronous USB I/O
+  /// (such as libusb) require separate opens, each with its own queue.
   Future<int> getFileDescriptor();
 
   /// Returns the raw USB descriptors.
@@ -100,17 +105,26 @@ abstract class UsbDeviceConnection {
 
   /// Waits for a completed request queued on any endpoint of this connection.
   ///
-  /// [timeout] is in milliseconds. Null denotes an indefinite wait; zero polls.
-  /// Currently unsupported on Android: the returned future fails with
-  /// [UnsupportedError] without waiting or inspecting [timeout].
+  /// [timeout] is in milliseconds. Null waits indefinitely. Zero checks once
+  /// and calls Android only if an outstanding transfer is unreserved. A positive
+  /// timeout includes waiting for a reservation. The remaining budget is passed
+  /// once to Android, which defines the native behavior for very large values.
+  /// A timeout throws [TimeoutException] and leaves transfers queued. Android's
+  /// null result indicates a native wait error. A successful result is the
+  /// original request object with its length and IN bytes updated.
   Future<UsbRequest?> requestWait({int? timeout});
 
   /// Closes the connection.
   ///
   /// Android close is idempotent. Scheduling it rejects work that has not
   /// passed its final lifecycle check under shared native access.
-  /// Native close waits for admitted calls to return, including transfers and
-  /// direct reads, and can remain pending indefinitely with a zero timeout.
+  /// Close wakes request waiters waiting for a reservation with [StateError]
+  /// and attempts to cancel outstanding requests before waiting for admitted
+  /// native calls to return. A bulk or control transfer with timeout zero can
+  /// still keep close pending indefinitely. Close receives available leftover
+  /// completions before releasing the native connection.
+  /// This releases the plugin's references. Some Android implementations may
+  /// retain framework references for requests that could not be received.
   /// Calls native close once, without separate per-interface release calls;
   /// Android/kernel own resource teardown. Even if native close
   /// throws, this connection is permanently unusable; that error is reported
@@ -120,8 +134,8 @@ abstract class UsbDeviceConnection {
   /// retained JNI view can remain until GC after Java clears its native connection;
   /// a detach notification does not mean native close has already finished.
   /// Workers check admission when they run. Admitted calls may run concurrently.
-  /// Close neither interrupts their native access nor waits for Dart callback
-  /// delivery. JNI finalization does not close the connection.
+  /// Close does not wait for Dart callback delivery. JNI finalization does not
+  /// close the connection.
   Future<void> close();
 
   // Windows USB pipe extensions. Every method in this group currently fails

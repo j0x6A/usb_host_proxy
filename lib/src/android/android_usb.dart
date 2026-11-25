@@ -4,7 +4,6 @@ import 'dart:ui';
 
 import 'package:jni/jni.dart';
 
-import '../usb_backend.dart';
 import '../usb_configuration.dart';
 import '../usb_constants.dart';
 import '../usb_device.dart';
@@ -101,8 +100,47 @@ bool _boolean(JObject? value) =>
 String? _resultString(JObject? value) =>
     value?.as(JString.type).use((v) => v.toDartString());
 
+void _checkJniInt(int value, String name) {
+  RangeError.checkValueInInterval(value, -0x80000000, 0x7fffffff, name);
+}
+
+/// Stages the exact slice in Java memory and snapshots OUT before yielding.
+({JByteArray? bytes, int count}) _prepareTransfer(
+  Uint8List? buffer,
+  int offset,
+  int? length,
+  bool input,
+) {
+  final size = buffer?.length ?? 0;
+  RangeError.checkValueInInterval(offset, 0, size, 'offset');
+  final count = length ?? size - offset;
+  RangeError.checkValueInInterval(count, 0, size - offset, 'length');
+  _checkJniInt(count, 'length');
+
+  if (input && count > 0) {
+    // Uint8List has no writability flag. Check before submitting USB I/O.
+    final target = buffer!;
+    try {
+      target[offset] = target[offset];
+    } on UnsupportedError {
+      throw ArgumentError(
+        'A non-empty USB IN transfer requires a writable buffer',
+      );
+    }
+  }
+
+  final bytes = buffer == null ? null : JByteArray(count);
+  try {
+    if (!input && count > 0) bytes!.setRange(0, count, buffer!, offset);
+    return (bytes: bytes, count: count);
+  } catch (_) {
+    bytes?.release();
+    rethrow;
+  }
+}
+
 /// Engine-root proxy. Java owns discovery, event admission and all USB lifecycle.
-final class AndroidUsb implements UsbBackend {
+final class AndroidUsb {
   static final AndroidUsb instance = AndroidUsb._();
 
   /// Initialised once by management/events; conversions never read this field.
@@ -110,6 +148,12 @@ final class AndroidUsb implements UsbBackend {
   late j.UsbHostProxy$Session? _reference = _bind();
   final _attached = StreamController<UsbDevice>.broadcast();
   final _detached = StreamController<UsbDevice>.broadcast();
+  var _nextRequestToken = 0;
+  final _pendingRequests =
+      <
+        int,
+        ({AndroidUsbRequest request, Uint8List? target, int offset, int count})
+      >{};
 
   AndroidUsb._();
 
@@ -124,9 +168,11 @@ final class AndroidUsb implements UsbBackend {
       j.$UsbHostProxy$Events(
         attached$async: true,
         detached$async: true,
+        requestDiscarded$async: true,
         disposed$async: true,
         attached: (device) => _event(_attached, device, false),
         detached: (device) => _event(_detached, device, true),
+        requestDiscarded: _discardRequest,
         disposed: () {
           _reference?.release();
           _reference = null;
@@ -168,21 +214,18 @@ final class AndroidUsb implements UsbBackend {
     }
   }
 
-  @override
   Stream<UsbDevice> get deviceAttached {
     // Bind on first event access; an ended stream stays closed.
     final _ = _reference;
     return _attached.stream;
   }
 
-  @override
   Stream<UsbDevice> get deviceDetached {
     final _ = _reference;
     return _detached.stream;
   }
 
   /// Keeps the returned Java views, releasing only the temporary JNI array.
-  @override
   Future<Map<String, UsbDevice>> getDeviceList() async => _java(() {
     final array = _session.deviceList()!;
     try {
@@ -214,11 +257,9 @@ final class AndroidUsb implements UsbBackend {
     return device;
   }
 
-  @override
   Future<bool> hasPermission(UsbDevice device) async =>
       _java(() => _session.hasPermission(_device(device).native));
 
-  @override
   Future<bool> requestPermission(UsbDevice device) async {
     final session = _session;
     return _call(
@@ -227,7 +268,6 @@ final class AndroidUsb implements UsbBackend {
     );
   }
 
-  @override
   Future<UsbDeviceConnection?> openDevice(UsbDevice device) async {
     final session = _session;
     return _call((callback) => session.open(_device(device).native, callback), (
@@ -245,7 +285,52 @@ final class AndroidUsb implements UsbBackend {
     });
   }
 
-  @override
+  int _registerRequest(
+    AndroidUsbRequest request,
+    Uint8List? target,
+    int offset,
+    int count,
+  ) {
+    final token = ++_nextRequestToken;
+    _pendingRequests[token] = (
+      request: request,
+      target: target,
+      offset: offset,
+      count: count,
+    );
+    return token;
+  }
+
+  void _discardRequest(int token) {
+    _pendingRequests.remove(token);
+  }
+
+  UsbRequest? _receiveRequest(
+    JObject? value,
+  ) => value?.as(j.UsbHostProxy$RequestResult.type).use((result) {
+    final pending = _pendingRequests.remove(result.token());
+    if (pending == null) throw StateError('Unknown completed USB transfer');
+    final count = result.length;
+    if (count < 0 || count > pending.count) {
+      throw StateError(
+        'Android returned $count bytes for a ${pending.count}-byte USB transfer',
+      );
+    }
+    final target = pending.target;
+    if (target != null && count > 0) {
+      result.data!.use((bytes) {
+        target.setRange(
+          pending.offset,
+          pending.offset + count,
+          bytes.getRange(0, count),
+        );
+      });
+    }
+    // This is a delivered result, independent of the object's current binding.
+    pending.request._transferredLength = count;
+    return pending.request.request;
+  });
+
   Future<int> deviceId(String name) async => _java(() {
     final string = name.toJString();
     try {
@@ -255,7 +340,6 @@ final class AndroidUsb implements UsbBackend {
     }
   });
 
-  @override
   Future<String?> deviceName(int id) async =>
       _java(() => _string(j.UsbDevice.getDeviceName(id)));
 }
@@ -367,6 +451,127 @@ final class _AndroidEndpoint implements UsbEndpoint {
   int getType() => _java(() => native.type$1);
 }
 
+final class AndroidUsbRequest {
+  final UsbRequest request;
+  ({_AndroidEndpoint endpoint, j.UsbHostProxy$Request native})? _binding;
+  bool _initializing = false;
+  Future<void>? _closing;
+  int? _transferredLength;
+
+  AndroidUsbRequest(this.request);
+
+  int? get transferredLength => _transferredLength;
+
+  UsbEndpoint? getEndpoint() {
+    final binding = _binding;
+    return binding != null && _java(() => binding.native.isOpen)
+        ? binding.endpoint
+        : null;
+  }
+
+  void _checkBindingStable() {
+    if (_initializing || _closing != null) {
+      throw StateError('USB request binding is changing');
+    }
+  }
+
+  Future<bool> initialize(
+    UsbDeviceConnection connection,
+    UsbEndpoint endpoint,
+  ) async {
+    _checkBindingStable();
+    if (connection is! _AndroidConnection) {
+      throw ArgumentError.value(
+        connection,
+        'connection',
+        'Expected an Android USB connection',
+      );
+    }
+    if (endpoint is! _AndroidEndpoint) {
+      throw ArgumentError.value(
+        endpoint,
+        'endpoint',
+        'Expected an Android USB endpoint',
+      );
+    }
+    _initializing = true;
+    try {
+      await _releaseBinding();
+      final native = await _call(
+        (callback) =>
+            connection.native.initializeRequest(endpoint.native, callback),
+        (value) => value?.as(j.UsbHostProxy$Request.type),
+      );
+      if (native == null) return false;
+      _binding = (endpoint: endpoint, native: native);
+      return true;
+    } finally {
+      _initializing = false;
+    }
+  }
+
+  Future<bool> queue(
+    Uint8List? buffer, {
+    required int offset,
+    int? length,
+  }) async {
+    _checkBindingStable();
+    final native = _binding?.native;
+    if (native == null) throw StateError('USB request is uninitialized');
+    final input = _java(() => native.input);
+    final (bytes: bytes, count: count) = _prepareTransfer(
+      buffer,
+      offset,
+      length,
+      input,
+    );
+    final android = AndroidUsb.instance;
+    final Future<bool> queued;
+    try {
+      queued = _call((callback) {
+        final token = android._registerRequest(
+          this,
+          input ? buffer : null,
+          offset,
+          count,
+        );
+        try {
+          native.queue(bytes, token, callback);
+        } catch (_) {
+          android._discardRequest(token);
+          rethrow;
+        }
+      }, _boolean);
+    } finally {
+      // The worker holds the Java bytes after submission. No Dart view aliases them.
+      bytes?.release();
+    }
+    return queued;
+  }
+
+  Future<bool> cancel() async {
+    _checkBindingStable();
+    final native = _binding?.native;
+    return native == null ? false : _call(native.cancel, _boolean);
+  }
+
+  Future<void> close() async {
+    final closing = _closing;
+    if (closing != null) return closing;
+    _checkBindingStable();
+    if (_binding == null) return;
+    return _closing = _releaseBinding().whenComplete(() => _closing = null);
+  }
+
+  Future<void> _releaseBinding() async {
+    final binding = _binding;
+    if (binding == null) return;
+    await _call(binding.native.close, (_) {});
+    _binding = null;
+    binding.native.release();
+  }
+}
+
 /// Only explicit API calls reach close. Java owns detach/session cleanup and
 /// rejects closed connections; the retained JNI view is finalized independently.
 final class _AndroidConnection implements UsbDeviceConnection {
@@ -435,10 +640,6 @@ final class _AndroidConnection implements UsbDeviceConnection {
   @override
   Future<void> close() => _call(native.close, (_) {});
 
-  static void _checkJniInt(int value, String name) {
-    RangeError.checkValueInInterval(value, -0x80000000, 0x7fffffff, name);
-  }
-
   /// The worker owns its Java array until native return, even if the session
   /// ends earlier. Only a successful IN result is copied into the Dart view.
   Future<int> _transfer(
@@ -448,27 +649,13 @@ final class _AndroidConnection implements UsbDeviceConnection {
     required bool input,
     required void Function(JByteArray?, j.UsbHostProxy$Completion) start,
   }) async {
-    final size = buffer?.length ?? 0;
-    RangeError.checkValueInInterval(offset, 0, size, 'offset');
-    final count = length ?? size - offset;
-    RangeError.checkValueInInterval(count, 0, size - offset, 'length');
-    _checkJniInt(count, 'length');
-
-    if (input && count > 0) {
-      // Uint8List has no writability flag. Check before submitting USB I/O.
-      final target = buffer!;
-      try {
-        target[offset] = target[offset];
-      } on UnsupportedError {
-        throw ArgumentError(
-          'A non-empty USB IN transfer requires a writable buffer',
-        );
-      }
-    }
-
-    final bytes = buffer == null ? null : JByteArray(count);
+    final (bytes: bytes, count: count) = _prepareTransfer(
+      buffer,
+      offset,
+      length,
+      input,
+    );
     try {
-      if (!input && count > 0) bytes!.setRange(0, count, buffer!, offset);
       final transferred = await _call(
         (callback) => start(bytes, callback),
         (value) => value!.as(JInteger.type).use((n) => n.intValue()),
@@ -550,10 +737,31 @@ final class _AndroidConnection implements UsbDeviceConnection {
     );
   }
 
-  // Queued requests and Windows pipe operations are outside this implementation.
   @override
-  Future<UsbRequest?> requestWait({int? timeout}) async =>
-      throw UnsupportedError('USB request transport is not implemented');
+  Future<UsbRequest?> requestWait({int? timeout}) async {
+    if (timeout != null && timeout < 0) {
+      throw ArgumentError.value(
+        timeout,
+        'timeout',
+        'USB wait timeout must be non-negative',
+      );
+    }
+    try {
+      return await _call(
+        (callback) => native.requestWait(timeout ?? -1, callback),
+        AndroidUsb.instance._receiveRequest,
+      );
+    } on JThrowable catch (error) {
+      if (!error.isA(j.TimeoutException.type)) rethrow;
+      final message = error.message;
+      error.release();
+      throw TimeoutException(
+        message.isEmpty ? 'No USB request completed' : message,
+      );
+    }
+  }
+
+  // Windows pipe operations remain unsupported on Android.
   @override
   Future<bool> resetPipe(UsbInterface intf, UsbEndpoint endpoint) async =>
       throw UnsupportedError('WinUSB is not available on Android');

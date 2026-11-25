@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
 
@@ -14,6 +15,7 @@ void main() {
   late UsbDeviceConnection connection;
   late UsbEndpoint input;
   late UsbEndpoint output;
+  late UsbEndpoint unsupported;
   const deadline = Duration(seconds: 5);
 
   void fixtureAction(String method) {
@@ -69,6 +71,7 @@ void main() {
     final intf = device.getInterface(0);
     input = intf.getEndpoint(0);
     output = intf.getEndpoint(1);
+    unsupported = intf.getEndpoint(2);
     connection = (await manager.openDevice(device))!;
     addTearDown(() async {
       fixtureAction('resumeTransfer');
@@ -177,6 +180,164 @@ void main() {
       await expectLater(control(0x80000000, null), throwsRangeError);
     },
   );
+
+  testWidgets(
+    'queued transfers return their original request and buffer slice',
+    (_) async {
+      final receive = UsbRequest();
+      final send = UsbRequest();
+      final context = Object();
+      receive.setClientData(context);
+      expect(await receive.initialize(connection, input), isTrue);
+      expect(await send.initialize(connection, output), isTrue);
+      expect(receive.getEndpoint(), same(input));
+      expect(receive.transferredLength, isNull);
+      final target = Uint8List.fromList([10, 11, 12, 13, 14, 15, 16]);
+      final source = Uint8List.fromList([0, 0, 0xfe, 0x51, 0x42, 0]);
+      expect(
+        await receive.queue(
+          Uint8List.sublistView(target, 1, 6),
+          offset: 1,
+          length: 3,
+        ),
+        isTrue,
+      );
+      final sent = send.queue(
+        Uint8List.sublistView(source, 1, 5).asUnmodifiableView(),
+        offset: 1,
+      );
+      source[2] = 0;
+      expect(await sent, isTrue);
+      expect(target, [10, 11, 12, 13, 14, 15, 16]);
+
+      expect(await connection.requestWait(timeout: 0), same(send));
+      expect(send.transferredLength, 1);
+      expect(await connection.requestWait(timeout: 0), same(receive));
+      expect(receive.transferredLength, 2);
+      expect(target, [10, 11, 0x80, 0xff, 14, 15, 16]);
+      expect(receive.getClientData(), same(context));
+      await receive.close();
+      await send.close();
+    },
+  );
+
+  testWidgets('failed reinitialization leaves the idle request unbound', (
+    _,
+  ) async {
+    final request = UsbRequest();
+    expect(await request.initialize(connection, input), isTrue);
+    expect(await request.initialize(connection, unsupported), isFalse);
+    expect(request.getEndpoint(), isNull);
+    await expectLater(request.queue(null), throwsStateError);
+    expect(await request.initialize(connection, output), isTrue);
+    expect(request.getEndpoint(), same(output));
+
+    expect(await request.queue(null), isTrue);
+    expect(await request.cancel(), isTrue);
+    await expectLater(request.close(), throwsStateError);
+    await expectLater(request.initialize(connection, input), throwsStateError);
+    expect(request.getEndpoint(), same(output));
+    expect(await connection.requestWait(timeout: 0), same(request));
+    expect(request.transferredLength, 0);
+    await Future.wait([request.close(), request.close()]);
+    expect(await request.cancel(), isFalse);
+    expect(request.getEndpoint(), isNull);
+    expect(await request.initialize(connection, input), isTrue);
+    await request.close();
+  });
+
+  testWidgets('rebinding moves an idle request to the new connection', (
+    _,
+  ) async {
+    final device = (await manager.getDeviceList()).values.single;
+    final nextConnection = (await manager.openDevice(device))!;
+    addTearDown(nextConnection.close);
+    final request = UsbRequest();
+    expect(await request.initialize(connection, input), isTrue);
+    expect(await request.initialize(nextConnection, output), isTrue);
+    await connection.close();
+    expect(request.getEndpoint(), same(output));
+    expect(await request.queue(null), isTrue);
+    expect(await nextConnection.requestWait(timeout: 0), same(request));
+    await request.close();
+  });
+
+  testWidgets(
+    'queued IN validates slices and distinguishes timeout from native null',
+    (_) async {
+      final request = UsbRequest();
+      expect(await request.initialize(connection, input), isTrue);
+      await expectLater(request.queue(null, offset: 1), throwsRangeError);
+      await expectLater(
+        request.queue(Uint8List(1).asUnmodifiableView()),
+        throwsArgumentError,
+      );
+      await expectLater(
+        connection.requestWait(timeout: -1),
+        throwsArgumentError,
+      );
+      await expectLater(
+        connection.requestWait(timeout: 0),
+        throwsA(isA<TimeoutException>()),
+      );
+      await expectLater(
+        connection.requestWait(timeout: 20),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(await request.queue(Uint8List(0).asUnmodifiableView()), isTrue);
+      fixtureAction('failNextWait');
+      expect(await connection.requestWait(timeout: 0), isNull);
+      expect(await connection.requestWait(timeout: 1000), same(request));
+      expect(request.transferredLength, 0);
+      await request.close();
+    },
+  );
+
+  testWidgets('one submission satisfies one waiter and close wakes the other', (
+    _,
+  ) async {
+    final request = UsbRequest();
+    expect(await request.initialize(connection, input), isTrue);
+    final waits = [
+      for (var i = 0; i < 2; i++)
+        connection.requestWait().then<Object?>(
+          (value) => value,
+          onError: (Object error) => error,
+        ),
+    ];
+    expect(await request.queue(null), isTrue);
+    expect(await Future.any(waits).timeout(deadline), same(request));
+    await connection.close().timeout(deadline);
+    expect(
+      await Future.wait(waits).timeout(deadline),
+      unorderedEquals([same(request), isA<StateError>()]),
+    );
+    final untimedWaitCount = fixture.staticMethodId('untimedWaitCount', '()I');
+    expect(untimedWaitCount.call(fixture, jint.type, []), 1);
+    await request.close();
+  });
+
+  for (final detach in [false, true]) {
+    testWidgets(
+      'queued requests are discarded by ${detach ? 'detach' : 'close'} without a wait',
+      (_) async {
+        final request = UsbRequest();
+        final target = Uint8List.fromList([1, 2, 3]);
+        expect(await request.initialize(connection, input), isTrue);
+        expect(await request.queue(target), isTrue);
+        if (detach) {
+          fixtureAction('removeDevice');
+          expect(await manager.getDeviceList(), isEmpty);
+        }
+        await connection.close().timeout(deadline);
+        expect(target, [1, 2, 3]);
+        expect(request.transferredLength, isNull);
+        expect(request.getEndpoint(), isNull);
+        expect(await request.cancel(), isFalse);
+        await request.close();
+      },
+    );
+  }
 
   for (final detach in [false, true]) {
     testWidgets('admitted bulk outlives ${detach ? 'detach' : 'close'}', (

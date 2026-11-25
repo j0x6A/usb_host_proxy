@@ -16,23 +16,30 @@ import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbConfiguration;
 import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbRequest;
 import android.os.Looper;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.InOrder;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
@@ -60,6 +67,7 @@ public class UsbHostProxyTest {
     private UsbHostProxy.Device device;
     /** Simulated live discovery list; broadcasting alone does not change presence. */
     private HashMap<String, UsbDevice> attachedDevices;
+    private final ConcurrentLinkedQueue<UsbRequest> frameworkRequests = new ConcurrentLinkedQueue<>();
 
     /** Records callbacks without suppressing duplicates, so assertions can detect them. */
     private static final class Result implements UsbHostProxy.Completion {
@@ -109,7 +117,7 @@ public class UsbHostProxyTest {
         when(manager.getDeviceList()).thenReturn(attachedDevices);
         nativeConnection = mock(UsbDeviceConnection.class);
         when(manager.openDevice(usb)).thenReturn(nativeConnection);
-        UsbHostProxy.attach(context, 42);
+        UsbHostProxy.attach(context, 42, frameworkRequests::remove);
         session = UsbHostProxy.session(42);
         device = session.deviceList()[0];
     }
@@ -125,6 +133,23 @@ public class UsbHostProxyTest {
         session.open(device, result);
         assertNull(result.await().error);
         return (UsbHostProxy.Connection) result.value;
+    }
+
+    @Test public void missingUsbServiceLeavesDiscoveryEmptyAndIgnoresAttach() {
+        manager = null;
+        UsbHostProxy.attach(context, 42);
+        session = UsbHostProxy.session(42);
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        assertEquals(0, session.deviceList().length);
+
+        Intent intent = new Intent(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            .putExtra(UsbManager.EXTRA_DEVICE, usb);
+        context.sendBroadcast(intent);
+        shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(UsbHostProxy.handleActivityIntent(42, intent, false));
+        assertEquals(0, session.deviceList().length);
+        verifyNoInteractions(events);
     }
 
     /** Removes live presence before delivering detach, then drains receiver callbacks. */
@@ -178,6 +203,23 @@ public class UsbHostProxyTest {
 
     private UsbHostProxy.Endpoint endpointView(UsbEndpoint descriptor) {
         return view(UsbHostProxy.Endpoint.class, UsbEndpoint.class, descriptor);
+    }
+
+    private UsbHostProxy.Request initializeRequest(UsbHostProxy.Connection connection,
+            UsbEndpoint endpoint, UsbRequest handle) throws Exception {
+        when(handle.initialize(nativeConnection, endpoint)).thenReturn(true);
+        frameworkRequests.add(handle);
+        Result result = new Result();
+        connection.initializeRequest(endpointView(endpoint), result);
+        assertNull(result.await().error);
+        return (UsbHostProxy.Request) result.value;
+    }
+
+    private void queue(UsbHostProxy.Request request, byte[] bytes, long token) throws Exception {
+        Result result = new Result();
+        request.queue(bytes, token, result);
+        assertNull(result.await().error);
+        assertEquals(true, result.value);
     }
 
     /** One original framework tree, exposed through both flattened and nested paths. */
@@ -1359,6 +1401,579 @@ public class UsbHostProxyTest {
         verify(nativeConnection).controlTransfer(0x40, 0x33, 0x1234, 0x4321, slice, 0, 3, 29);
     }
 
+    @Test public void queueAndCancelPreserveTheRequestUntilItsCompletionIsReceived() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        when(endpoint.getDirection()).thenReturn(0x80);
+        UsbRequest handle = mock(UsbRequest.class);
+        UsbHostProxy.Request request = initializeRequest(connection, endpoint, handle);
+        AtomicReference<ByteBuffer> buffer = new AtomicReference<>();
+        when(handle.queue(any(ByteBuffer.class))).thenAnswer(call -> {
+            buffer.set(call.getArgument(0));
+            assertEquals(0, buffer.get().position());
+            assertEquals(3, buffer.get().remaining());
+            return true;
+        });
+        when(handle.cancel()).thenReturn(true);
+        TimeoutException timeout = new TimeoutException();
+        when(nativeConnection.requestWait(0)).thenThrow(timeout).thenAnswer(call -> {
+            buffer.get().put((byte) 0x80).put((byte) 0xff);
+            return handle;
+        });
+        long timeoutMillis = 10_000;
+
+        queue(request, new byte[3], 91);
+        Result duplicate = new Result();
+        request.queue(null, 92, duplicate);
+        assertTrue(duplicate.await().error instanceof IllegalStateException);
+        verify(events).requestDiscarded(92);
+        Result timedOut = new Result();
+        connection.requestWait(0, timedOut);
+        assertSame(timeout, timedOut.await().error);
+        Result errorResult = new Result();
+        connection.requestWait(timeoutMillis, errorResult);
+        assertNull(errorResult.await().error);
+        assertNull(errorResult.value);
+        verify(nativeConnection).requestWait(timeoutMillis);
+
+        Result cancelled = new Result();
+        request.cancel(cancelled);
+        assertEquals(true, cancelled.await().value);
+        assertThrows(IllegalStateException.class, () -> request.close(new Result()));
+        verify(handle, never()).close();
+        verify(events, never()).requestDiscarded(91);
+        Result wait = new Result();
+        connection.requestWait(0, wait);
+        assertNull(wait.await().error);
+        UsbHostProxy.RequestResult completed = (UsbHostProxy.RequestResult) wait.value;
+        assertEquals(91, completed.token());
+        assertEquals(2, completed.length);
+        assertArrayEquals(new byte[] {(byte) 0x80, (byte) 0xff, 0}, completed.data);
+
+        Result refused = new Result();
+        request.queue(null, 93, refused);
+        assertNull(refused.await().error);
+        assertEquals(false, refused.value);
+        verify(events).requestDiscarded(93);
+
+        Result closed = new Result();
+        request.close(closed);
+        assertNull(closed.await().error);
+        Result closedAgain = new Result();
+        request.close(closedAgain);
+        assertNull(closedAgain.await().error);
+        assertFalse(request.isOpen());
+        verify(handle).close();
+    }
+
+    @Test public void cancelReturnsFalseAfterTheRequestOrItsConnectionCloses() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbRequest firstHandle = mock(UsbRequest.class);
+        UsbRequest secondHandle = mock(UsbRequest.class);
+        UsbHostProxy.Request first = initializeRequest(connection, endpoint, firstHandle);
+        UsbHostProxy.Request second = initializeRequest(connection, endpoint, secondHandle);
+
+        Result requestClosed = new Result();
+        first.close(requestClosed);
+        assertNull(requestClosed.await().error);
+        Result firstCancelled = new Result();
+        first.cancel(firstCancelled);
+        assertNull(firstCancelled.await().error);
+        assertEquals(false, firstCancelled.value);
+
+        Result connectionClosed = new Result();
+        connection.close(connectionClosed);
+        assertNull(connectionClosed.await().error);
+        Result secondCancelled = new Result();
+        second.cancel(secondCancelled);
+        assertNull(secondCancelled.await().error);
+        assertEquals(false, secondCancelled.value);
+
+        verify(firstHandle).close();
+        verify(secondHandle).close();
+        verify(firstHandle, never()).cancel();
+        verify(secondHandle, never()).cancel();
+    }
+
+    @Test public void closeWakesIndefiniteWaitOnAnEmptyQueueWithoutCallingAndroid() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result wait = new Result();
+        Result closed = new Result();
+        connection.requestWait(-1, wait);
+        Thread worker = startWorker(tasks.remove());
+        try {
+            awaitWorkerState(worker, Thread.State.WAITING);
+            verify(nativeConnection, never()).requestWait(anyLong());
+            verify(nativeConnection, never()).requestWait();
+            connection.close(closed);
+            startWorker(tasks.remove());
+            assertTrue(wait.await().error instanceof IllegalStateException);
+            assertNull(closed.await().error);
+        } finally { worker.interrupt(); }
+
+        verify(nativeConnection, never()).requestWait(anyLong());
+        verify(nativeConnection, never()).requestWait();
+        verify(nativeConnection).close();
+    }
+
+    @Test public void emptyQueueUsesOnlyTheJavaDeadlineAndPassesALargeRemainingBudgetOnce() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbRequest handle = mock(UsbRequest.class);
+        when(handle.queue(null)).thenReturn(true);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        long timeout = 4_294_967_295L;
+        AtomicLong nativeTimeout = new AtomicLong();
+        when(nativeConnection.requestWait(anyLong())).thenAnswer(call -> {
+            nativeTimeout.set(call.getArgument(0));
+            return handle;
+        });
+
+        Result longWait = new Result();
+        long start = System.nanoTime();
+        connection.requestWait(timeout, longWait);
+        Thread worker = startWorker(tasks.remove());
+        try {
+            awaitWorkerState(worker, Thread.State.TIMED_WAITING);
+            Result timedOut = new Result();
+            connection.requestWait(25, timedOut);
+            startWorker(tasks.remove());
+            assertTrue(timedOut.await().error instanceof TimeoutException);
+            verify(nativeConnection, never()).requestWait(anyLong());
+            verify(nativeConnection, never()).requestWait();
+
+            Result queued = new Result();
+            request.queue(null, 94, queued);
+            tasks.remove().run();
+            assertEquals(true, queued.await().value);
+            assertNull(longWait.await().error);
+            assertEquals(94L, ((UsbHostProxy.RequestResult) longWait.value).token());
+            long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertTrue(nativeTimeout.get() < timeout);
+            assertTrue(nativeTimeout.get() >= timeout - elapsed - 1);
+            assertTrue(nativeTimeout.get() > Integer.MAX_VALUE);
+            verify(nativeConnection).requestWait(anyLong());
+            verify(nativeConnection, never()).requestWait();
+        } finally { worker.interrupt(); }
+
+        Result queued = new Result();
+        request.queue(null, 95, queued);
+        tasks.remove().run();
+        assertEquals(true, queued.await().value);
+        Result immediate = new Result();
+        connection.requestWait(timeout, immediate);
+        tasks.remove().run();
+        assertNull(immediate.await().error);
+        assertEquals(95L, ((UsbHostProxy.RequestResult) immediate.value).token());
+        verify(nativeConnection).requestWait(timeout);
+        verify(nativeConnection, times(2)).requestWait(anyLong());
+
+        Result closed = new Result();
+        connection.close(closed);
+        tasks.remove().run();
+        assertNull(closed.await().error);
+    }
+
+    @Test public void concurrentWaitersReturnTheTokensOfTheFrameworkRequestsTheyReceived() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbRequest first = mock(UsbRequest.class);
+        UsbRequest second = mock(UsbRequest.class);
+        when(first.queue(null)).thenReturn(true);
+        when(second.queue(null)).thenReturn(true);
+        queue(initializeRequest(connection, endpoint, first), null, 101);
+        queue(initializeRequest(connection, endpoint, second), null, 102);
+
+        CountDownLatch bothWaiting = new CountDownLatch(2);
+        AtomicBoolean returnedSecond = new AtomicBoolean();
+        when(nativeConnection.requestWait()).thenAnswer(call -> {
+            UsbRequest completed = returnedSecond.getAndSet(true) ? first : second;
+            bothWaiting.countDown();
+            assertTrue(bothWaiting.await(10, TimeUnit.SECONDS));
+            return completed;
+        });
+        Result one = new Result();
+        Result two = new Result();
+        connection.requestWait(-1, one);
+        connection.requestWait(-1, two);
+        assertNull(one.await().error);
+        assertNull(two.await().error);
+        UsbHostProxy.RequestResult resultOne = (UsbHostProxy.RequestResult) one.value;
+        UsbHostProxy.RequestResult resultTwo = (UsbHostProxy.RequestResult) two.value;
+        assertEquals(Set.of(101L, 102L), Set.of(resultOne.token(), resultTwo.token()));
+        assertEquals(0, resultOne.length);
+        assertEquals(0, resultTwo.length);
+        verify(nativeConnection, times(2)).requestWait();
+        verify(nativeConnection, never()).requestWait(anyLong());
+    }
+
+    @Test public void pollAndSecondWaitCannotTakeTheOnlyReservedCompletion() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbRequest first = mock(UsbRequest.class);
+        UsbRequest second = mock(UsbRequest.class);
+        when(first.queue(null)).thenReturn(true);
+        when(second.queue(null)).thenReturn(true);
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbHostProxy.Request firstRequest = initializeRequest(connection, endpoint, first);
+        UsbHostProxy.Request secondRequest = initializeRequest(connection, endpoint, second);
+        queue(firstRequest, null, 105);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch allowFirstCompletion = new CountDownLatch(1);
+        when(nativeConnection.requestWait()).thenAnswer(call -> {
+            entered.countDown();
+            assertTrue(allowFirstCompletion.await(10, TimeUnit.SECONDS));
+            return first;
+        }).thenReturn(second);
+        Result waitingForFirst = new Result();
+        connection.requestWait(-1, waitingForFirst);
+        assertTrue(entered.await(10, TimeUnit.SECONDS));
+
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result waitingForSecond = new Result();
+        connection.requestWait(-1, waitingForSecond);
+        Thread worker = startWorker(tasks.remove());
+        try {
+            awaitWorkerState(worker, Thread.State.WAITING);
+            Result poll = new Result();
+            connection.requestWait(0, poll);
+            tasks.remove().run();
+            assertTrue(poll.await().error instanceof TimeoutException);
+            verify(nativeConnection).requestWait();
+            verify(nativeConnection, never()).requestWait(anyLong());
+
+            Result queued = new Result();
+            secondRequest.queue(null, 106, queued);
+            tasks.remove().run();
+            assertEquals(true, queued.await().value);
+            assertNull(waitingForSecond.await().error);
+            assertEquals(106L, ((UsbHostProxy.RequestResult) waitingForSecond.value).token());
+        } finally {
+            allowFirstCompletion.countDown();
+            worker.interrupt();
+        }
+        assertNull(waitingForFirst.await().error);
+        assertEquals(105L, ((UsbHostProxy.RequestResult) waitingForFirst.value).token());
+        verify(nativeConnection, times(2)).requestWait();
+
+        Result closed = new Result();
+        connection.close(closed);
+        tasks.remove().run();
+        assertNull(closed.await().error);
+    }
+
+    @Test public void closeWakesJavaWaitersAndCancelsActiveNativeWaitBeforeClosing() throws Exception {
+        assertLifecycleWakesNativeAndJavaWaiters(false);
+    }
+
+    @Test public void detachWakesJavaWaitersAndCancelsActiveNativeWaitBeforeClosing() throws Exception {
+        assertLifecycleWakesNativeAndJavaWaiters(true);
+    }
+
+    @Test public void closeCancelsAQueueAcceptedAfterClosingHasStarted() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbRequest handle = mock(UsbRequest.class);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
+        CountDownLatch queueStarted = new CountDownLatch(1);
+        CountDownLatch acceptQueue = new CountDownLatch(1);
+        when(handle.queue(null)).thenAnswer(call -> {
+            queueStarted.countDown();
+            assertTrue(acceptQueue.await(10, TimeUnit.SECONDS));
+            return true;
+        });
+        when(nativeConnection.requestWait(0)).thenReturn(handle);
+
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result queued = new Result();
+        request.queue(null, 108, queued);
+        startWorker(tasks.remove());
+        Result closed = new Result();
+        try {
+            assertTrue(queueStarted.await(10, TimeUnit.SECONDS));
+            connection.close(closed);
+            Thread closer = startWorker(tasks.remove());
+            // Cancellation must wait for admission and publication under the request lock.
+            awaitWorkerState(closer, Thread.State.BLOCKED);
+            verify(handle, never()).cancel();
+            verify(nativeConnection, never()).close();
+        } finally { acceptQueue.countDown(); }
+
+        assertNull(queued.await().error);
+        assertEquals(true, queued.value);
+        assertNull(closed.await().error);
+        InOrder nativeCalls = inOrder(handle, nativeConnection);
+        nativeCalls.verify(handle).queue(null);
+        nativeCalls.verify(handle).cancel();
+        nativeCalls.verify(nativeConnection).requestWait(0);
+        nativeCalls.verify(handle).close();
+        nativeCalls.verify(nativeConnection).close();
+    }
+
+    private void assertLifecycleWakesNativeAndJavaWaiters(boolean detach) throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbRequest handle = mock(UsbRequest.class);
+        when(handle.queue(null)).thenReturn(true);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
+        queue(request, null, 107);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        CountDownLatch returnFromAndroid = new CountDownLatch(1);
+        when(handle.cancel()).thenAnswer(call -> { cancelled.countDown(); return true; });
+        when(nativeConnection.requestWait()).thenAnswer(call -> {
+            entered.countDown();
+            assertTrue(returnFromAndroid.await(10, TimeUnit.SECONDS));
+            assertEquals(0, cancelled.getCount());
+            return handle;
+        }).thenThrow(new AssertionError("A second waiter entered Android for one URB"));
+
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result nativeWait = new Result();
+        connection.requestWait(-1, nativeWait);
+        startWorker(tasks.remove());
+        Result javaWait = new Result();
+        Result closed = new Result();
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            connection.requestWait(-1, javaWait);
+            Thread javaWorker = startWorker(tasks.remove());
+            try {
+                awaitWorkerState(javaWorker, Thread.State.WAITING);
+                if (detach) detachDevice();
+                connection.close(closed);
+                startWorker(tasks.remove());
+
+                assertTrue(cancelled.await(10, TimeUnit.SECONDS));
+                assertTrue(javaWait.await().error instanceof IllegalStateException);
+                assertEquals(1, closed.done.getCount());
+                verify(nativeConnection, never()).close();
+                verify(handle, never()).close();
+            } finally { javaWorker.interrupt(); }
+        } finally { returnFromAndroid.countDown(); }
+
+        assertNull(nativeWait.await().error);
+        assertEquals(107L, ((UsbHostProxy.RequestResult) nativeWait.value).token());
+        assertNull(closed.await().error);
+        InOrder nativeCalls = inOrder(handle, nativeConnection);
+        nativeCalls.verify(handle).cancel();
+        nativeCalls.verify(handle).close();
+        nativeCalls.verify(nativeConnection).close();
+        verify(nativeConnection).requestWait();
+        verify(nativeConnection, never()).requestWait(anyLong());
+    }
+
+    @Test public void delayedCompletionKeepsItsSubmissionAfterTheRequestIsRebound() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        UsbEndpoint input = mock(UsbEndpoint.class);
+        when(input.getDirection()).thenReturn(0x80);
+        UsbRequest oldHandle = mock(UsbRequest.class);
+        UsbHostProxy.Request oldRequest = initializeRequest(connection, input, oldHandle);
+        AtomicReference<ByteBuffer> oldBuffer = new AtomicReference<>();
+        when(oldHandle.queue(any(ByteBuffer.class))).thenAnswer(call -> {
+            oldBuffer.set(call.getArgument(0));
+            return true;
+        });
+        queue(oldRequest, new byte[2], 111);
+        when(nativeConnection.requestWait(0)).thenAnswer(call -> {
+            oldBuffer.get().put((byte) 42);
+            return oldHandle;
+        });
+        LinkedBlockingQueue<Runnable> delivery = new LinkedBlockingQueue<>();
+        Result delayed = new Result();
+        connection.requestWait(0, new UsbHostProxy.Completion() {
+            @Override public void success(Object value) { delivery.add(() -> delayed.success(value)); }
+            @Override public void failure(Throwable error) { delivery.add(() -> delayed.failure(error)); }
+        });
+        Runnable deliverOld = delivery.poll(10, TimeUnit.SECONDS);
+        assertNotNull(deliverOld);
+
+        Result oldClosed = new Result();
+        oldRequest.close(oldClosed);
+        assertNull(oldClosed.await().error);
+        UsbRequest newHandle = mock(UsbRequest.class);
+        when(newHandle.queue(null)).thenReturn(true);
+        UsbHostProxy.Request newRequest = initializeRequest(connection, mock(UsbEndpoint.class), newHandle);
+        queue(newRequest, null, 112);
+        doReturn(newHandle).when(nativeConnection).requestWait(0);
+
+        deliverOld.run();
+        assertNull(delayed.await().error);
+        UsbHostProxy.RequestResult old = (UsbHostProxy.RequestResult) delayed.value;
+        assertEquals(111, old.token());
+        assertEquals(1, old.length);
+        assertArrayEquals(new byte[] {42, 0}, old.data);
+        assertThrows(IllegalStateException.class, () -> newRequest.close(new Result()));
+        Result next = new Result();
+        connection.requestWait(0, next);
+        assertNull(next.await().error);
+        assertEquals(112, ((UsbHostProxy.RequestResult) next.value).token());
+        verify(events, never()).requestDiscarded(anyLong());
+    }
+
+    @Test public void detachReapsAvailableRequestsAndClosesTheConnectionBeforeUnreapedHandles() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbRequest available = mock(UsbRequest.class);
+        UsbRequest unavailable = mock(UsbRequest.class);
+        when(available.queue(null)).thenReturn(true);
+        when(unavailable.queue(null)).thenReturn(true);
+        UsbHostProxy.Request first = initializeRequest(connection, endpoint, available);
+        UsbHostProxy.Request second = initializeRequest(connection, endpoint, unavailable);
+        queue(first, null, 201);
+        queue(second, null, 202);
+        when(nativeConnection.requestWait(0)).thenReturn(available).thenThrow(new TimeoutException());
+
+        detachDevice();
+        Result closed = new Result();
+        connection.close(closed);
+        assertNull(closed.await().error);
+        assertFalse(first.isOpen());
+        assertFalse(second.isOpen());
+        InOrder nativeCalls = inOrder(available, unavailable, nativeConnection);
+        nativeCalls.verify(nativeConnection, times(2)).requestWait(0);
+        nativeCalls.verify(available).close();
+        nativeCalls.verify(nativeConnection).close();
+        nativeCalls.verify(unavailable).close();
+        verify(available).cancel();
+        verify(unavailable).cancel();
+        verify(events).requestDiscarded(201);
+        verify(events).requestDiscarded(202);
+    }
+
+    @Test public void failedConnectionCloseDoesNotFreeUnreapedFrameworkRequest() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        UsbRequest handle = mock(UsbRequest.class);
+        when(handle.queue(null)).thenReturn(true);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
+        queue(request, null, 301);
+        when(nativeConnection.requestWait(0)).thenReturn(null);
+        SecurityException failure = new SecurityException("failed close");
+        doThrow(failure).when(nativeConnection).close();
+
+        Result closed = new Result();
+        connection.close(closed);
+        assertSame(failure, closed.await().error);
+        verify(handle, never()).close();
+        verify(events).requestDiscarded(301);
+        assertFalse(request.isOpen());
+        Result requestClosed = new Result();
+        request.close(requestClosed);
+        assertNull(requestClosed.await().error);
+    }
+
+    @Test public void closeAttemptsAllPendingCancellationsAndReportsTheirErrors() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbRequest first = mock(UsbRequest.class);
+        UsbRequest second = mock(UsbRequest.class);
+        long token = 302;
+        for (UsbRequest handle : new UsbRequest[] {first, second}) {
+            when(handle.queue(null)).thenReturn(true);
+            queue(initializeRequest(connection, endpoint, handle), null, token++);
+        }
+        RuntimeException firstError = new RuntimeException("first cancellation failed");
+        RuntimeException secondError = new RuntimeException("second cancellation failed");
+        when(first.cancel()).thenThrow(firstError);
+        when(second.cancel()).thenThrow(secondError);
+
+        Result closed = new Result();
+        connection.close(closed);
+
+        Throwable failure = closed.await().error;
+        assertTrue(failure == firstError || failure == secondError);
+        assertArrayEquals(new Throwable[] {failure == firstError ? secondError : firstError},
+            failure.getSuppressed());
+        verify(first).cancel();
+        verify(second).cancel();
+        verify(nativeConnection).close();
+        verify(first).close();
+        verify(second).close();
+    }
+
+    @Test public void failedCancellationSweepStillReapsAndClosesForAllWaiters() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbRequest handle = mock(UsbRequest.class);
+        when(handle.queue(null)).thenReturn(true);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
+        queue(request, null, 304);
+        when(nativeConnection.requestWait(0)).thenReturn(handle);
+
+        // Fail before the per-request cancellation loop. Exclusive cleanup can still run.
+        RuntimeException failure = new RuntimeException("failed to enter cancellation sweep");
+        Field lifetime = UsbHostProxy.Connection.class.getDeclaredField("nativeLifetime");
+        lifetime.setAccessible(true);
+        lifetime.set(connection, new ReentrantReadWriteLock() {
+            @Override public ReadLock readLock() { throw failure; }
+        });
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result first = new Result();
+        Result shared = new Result();
+        connection.close(first);
+        connection.close(shared);
+        assertEquals(1, tasks.size());
+        tasks.remove().run();
+
+        assertSame(failure, first.await().error);
+        assertSame(failure, shared.await().error);
+        assertFalse(request.isOpen());
+        assertThrows(IllegalStateException.class, connection::fileDescriptor);
+        InOrder nativeCalls = inOrder(handle, nativeConnection);
+        nativeCalls.verify(nativeConnection).requestWait(0);
+        nativeCalls.verify(handle).close();
+        nativeCalls.verify(nativeConnection).close();
+
+        Result later = new Result();
+        connection.close(later);
+        assertTrue(tasks.isEmpty());
+        assertNull(later.await().error);
+    }
+
+    @Test public void sessionEndRetiresAReceivedResultIfItWinsBeforePublication() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
+        session.listen(events);
+        UsbRequest handle = mock(UsbRequest.class);
+        when(handle.queue(null)).thenReturn(true);
+        queue(initializeRequest(connection, mock(UsbEndpoint.class), handle), null, 401);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        CountDownLatch finishWait = new CountDownLatch(1);
+        CountDownLatch retired = new CountDownLatch(1);
+        when(handle.cancel()).thenAnswer(call -> { cancelled.countDown(); return true; });
+        doAnswer(call -> { retired.countDown(); return null; }).when(events).requestDiscarded(401);
+        when(nativeConnection.requestWait()).thenAnswer(call -> {
+            entered.countDown();
+            assertTrue(finishWait.await(10, TimeUnit.SECONDS));
+            return handle;
+        });
+
+        Result wait = new Result();
+        connection.requestWait(-1, wait);
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            UsbHostProxy.detach(42);
+            assertTrue(wait.await().error instanceof IllegalStateException);
+            assertTrue(cancelled.await(10, TimeUnit.SECONDS));
+            verify(nativeConnection, never()).close();
+        } finally { finishWait.countDown(); }
+        assertTrue(retired.await(10, TimeUnit.SECONDS));
+        Result closed = new Result();
+        connection.close(closed);
+        assertNull(closed.await().error);
+        assertEquals(1, wait.completions);
+        verify(nativeConnection, never()).requestWait(0);
+        verify(handle).close();
+        verify(events).requestDiscarded(401);
+    }
+
     @Test public void transfersPreserveNullEmptyNegativeResultsAndAndroidExceptions() throws Exception {
         UsbHostProxy.Connection connection = open();
         UsbEndpoint endpoint = mock(UsbEndpoint.class);
@@ -1515,6 +2130,22 @@ public class UsbHostProxyTest {
         }
         verify(nativeConnection, times(1)).close();
         verifyNoMoreInteractions(nativeConnection);
+    }
+
+    private static Thread startWorker(Runnable task) {
+        Thread worker = new Thread(task);
+        worker.setDaemon(true);
+        worker.start();
+        return worker;
+    }
+
+    /** Waits for a test-owned thread to park, without depending on worker names or private state. */
+    private static void awaitWorkerState(Thread worker, Thread.State state) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (worker.isAlive() && worker.getState() != state && System.nanoTime() - deadline < 0) {
+            Thread.yield();
+        }
+        assertEquals("USB operation did not park", state, worker.getState());
     }
 
     /** Holds pool tasks only in tests, allowing deterministic worker start/close races. */
@@ -1703,19 +2334,6 @@ public class UsbHostProxyTest {
         UsbDeviceConnection otherNative = mock(UsbDeviceConnection.class);
         when(manager.openDevice(usb)).thenReturn(otherNative);
         UsbHostProxy.Connection second = open();
-        CountDownLatch fallbackClosed = new CountDownLatch(1);
-        Thread lifecycleThread = Thread.currentThread();
-        AtomicReference<Thread> closingThread = new AtomicReference<>();
-        doAnswer(call -> {
-            closingThread.set(Thread.currentThread());
-            fallbackClosed.countDown();
-            return null;
-        }).when(nativeConnection).close();
-        doAnswer(call -> {
-            closingThread.set(Thread.currentThread());
-            fallbackClosed.countDown();
-            return null;
-        }).when(otherNative).close();
         UsbHostProxy.Events events = mock(UsbHostProxy.Events.class);
         session.listen(events);
         LinkedBlockingQueue<Runnable> tasks = holdWorkers();
@@ -1729,7 +2347,6 @@ public class UsbHostProxyTest {
             UsbHostProxy.detach(42);
             verify(events).disposed();
             verify(workers).shutdown();
-            assertTrue(((ExecutorService) getField(session, "closeFallback")).isShutdown());
             assertNull(getField(session, "events"));
             assertThrows(IllegalStateException.class, () -> UsbHostProxy.session(42));
             assertTrue(permission.await().error instanceof IllegalStateException);
@@ -1743,8 +2360,6 @@ public class UsbHostProxyTest {
         }
         assertFalse(device.lifetime.isAlive());
         assertNull(storedDescriptor(device));
-        assertTrue(fallbackClosed.await(10, TimeUnit.SECONDS));
-        assertNotSame(lifecycleThread, closingThread.get());
         assertEquals(3, tasks.size()); // Serial, permission submission and one accepted close.
         assertTrue(ShadowLog.getLogsForTag("UsbHostProxy").stream()
             .anyMatch(item -> item.throwable == error));
@@ -1754,60 +2369,21 @@ public class UsbHostProxyTest {
         assertEquals(1, permission.completions);
         assertTrue(((Map<?, ?>) getField(session, "permissions")).isEmpty());
 
-        for (UsbHostProxy.Connection connection : new UsbHostProxy.Connection[] {first, second}) {
-            Result closed = new Result();
-            connection.close(closed);
-            assertNull(closed.await().error);
-            assertEquals(1, closed.completions);
-            assertNull(getField(connection, "connection"));
-            assertThrows(IllegalStateException.class, connection::fileDescriptor);
-        }
-        verify(nativeConnection, times(1)).close();
-        verify(otherNative, times(1)).close();
-        assertTrue(tasks.isEmpty());
-        assertTrue(((Set<?>) getField(session, "connections")).isEmpty());
+        Set<UsbHostProxy.Connection> remaining = getField(session, "connections");
+        assertEquals(1, remaining.size());
+        UsbHostProxy.Connection rejected = remaining.iterator().next();
+        boolean firstWasRejected = rejected == first;
+        UsbDeviceConnection rejectedNative = firstWasRejected ? nativeConnection : otherNative;
+        UsbDeviceConnection acceptedNative = firstWasRejected ? otherNative : nativeConnection;
+        UsbHostProxy.Connection accepted = firstWasRejected ? second : first;
+        assertSame(rejectedNative, getField(rejected, "connection"));
+        assertFalse((Boolean) getField(rejected, "closing"));
+        assertThrows(IllegalStateException.class, rejected::fileDescriptor);
+        assertNull(getField(accepted, "connection"));
+        verify(rejectedNative, never()).close();
+        verify(acceptedNative).close();
         assertTrue(((Set<?>) getField(session, "calls")).isEmpty());
         verifyNoMoreInteractions(events);
-    }
-
-    @Test public void rejectedDisposeClosesIdleConnectionWhileAnotherNativeCallIsRunning() throws Exception {
-        UsbHostProxy.Connection busy = open();
-        UsbDeviceConnection idleNative = mock(UsbDeviceConnection.class);
-        when(manager.openDevice(usb)).thenReturn(idleNative);
-        UsbHostProxy.Connection idle = open();
-        CountDownLatch readStarted = new CountDownLatch(1);
-        CountDownLatch releaseRead = new CountDownLatch(1);
-        doAnswer(call -> {
-            readStarted.countDown();
-            assertTrue(releaseRead.await(10, TimeUnit.SECONDS));
-            return "serial";
-        }).when(nativeConnection).getSerial();
-        Result serial = new Result();
-        busy.serial(serial);
-        Result busyClosed = new Result();
-        ExecutorService fallback = getField(session, "closeFallback");
-        try {
-            assertTrue(readStarted.await(10, TimeUnit.SECONDS));
-            holdWorkers();
-            ExecutorService workers = getField(session, "workers");
-            doThrow(new OutOfMemoryError("simulated worker startup failure"))
-                .when(workers).execute(any(Runnable.class));
-            UsbHostProxy.detach(42);
-            assertTrue(serial.await().error instanceof IllegalStateException);
-            Result idleClosed = new Result();
-            idle.close(idleClosed);
-            assertNull(idleClosed.await().error);
-            verify(idleNative, times(1)).close();
-            verify(nativeConnection, never()).close();
-            assertFalse(fallback.isShutdown());
-            busy.close(busyClosed);
-            assertEquals(1, busyClosed.done.getCount());
-        } finally {
-            releaseRead.countDown();
-        }
-        assertNull(busyClosed.await().error);
-        verify(nativeConnection, times(1)).close();
-        assertTrue(fallback.awaitTermination(10, TimeUnit.SECONDS));
     }
 
     @Test public void workerStartupErrorsAlsoSettleAllFiveSubmissionPaths() throws Exception {
@@ -2140,6 +2716,8 @@ public class UsbHostProxyTest {
 
     @Test public void sessionEndDuringNativeUseSettlesOnceAndClosesAfterNativeReturn() throws Exception {
         UsbHostProxy.Connection connection = open();
+        UsbRequest handle = mock(UsbRequest.class);
+        UsbHostProxy.Request request = initializeRequest(connection, mock(UsbEndpoint.class), handle);
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch unblock = new CountDownLatch(1);
         AtomicBoolean nativeInUse = new AtomicBoolean();
@@ -2162,11 +2740,16 @@ public class UsbHostProxyTest {
             assertTrue(serial.await().error instanceof IllegalStateException);
             assertEquals(1, serial.completions);
             verify(nativeConnection, never()).close();
+            Result requestClose = new Result();
+            request.close(requestClose);
+            assertTrue(requestClose.await().error instanceof IllegalStateException);
+            verify(handle, never()).close();
         } finally { unblock.countDown(); }
         Result closed = new Result();
         connection.close(closed);
         assertNull(closed.await().error);
         assertEquals(1, serial.completions);
+        verify(handle).close();
         verify(nativeConnection, times(1)).close();
     }
 }

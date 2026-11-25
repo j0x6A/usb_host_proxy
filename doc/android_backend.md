@@ -2,15 +2,14 @@
 
 Start with the [public usage guide](../README.md). This document explains how an
 operation crosses the Dart/Java boundary and who cleans up its resources.
-The backend implements management and information calls plus bulk and control
-transfers.
+The Android implementation supports management and information calls, bulk and
+control transfers, and queued requests.
 
 ## Source map
 
 | File | Responsibility |
 | --- | --- |
 | `lib/usb_host_proxy.dart` and its `lib/src/usb_*.dart` exports | Public classes, contracts, descriptor meanings, constants and placeholders. |
-| `lib/src/usb_backend.dart`, `lib/src/usb_backend_selector.dart` | Internal backend contract and the single platform selection point. Not exported by the public library. |
 | `lib/src/android/android_usb.dart` | JNI references, Java-to-Dart errors, completion-to-Future conversion and event streams. |
 | `lib/src/android/bindings.g.dart` | Generated Java bindings; do not edit by hand. |
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxy.java` | Sessions, discovery, permissions, workers and native connection lifetime. |
@@ -30,14 +29,12 @@ Java resolves descriptor views before `Connection.submit()`. The worker calls
 Android and returns through `Completion`. `openDevice()` has a separate path
 because invalidation can require cleanup of a late result before delivery.
 
-## Backend routing
+## Platform routing
 
-`UsbManager` and the static device-name/ID helpers delegate to `UsbBackend`.
-The selector chooses Android or the existing non-Android placeholders. Linux
-and Windows implementations can replace that branch without adding platform
-conditions to public methods.
-Each system adapter owns its resources, while the shared contract has no USB
-registry, lifecycle policy or operation queue.
+`UsbManager`, `UsbRequest` and the static `UsbDevice` name/ID helpers check
+`Platform.isAndroid`. On Android, management and conversion calls go directly
+to `AndroidUsb`, and `UsbRequest` uses the concrete `AndroidUsbRequest` adapter.
+The public classes provide the existing fallback behavior on other platforms.
 
 Obtaining `AndroidUsb.instance` does not bind JNI to an engine session. Its
 nullable session reference has a lazy initializer, first read by a management
@@ -71,7 +68,8 @@ name rules and do not authorize access through an invalidated view.
 Enumeration checks names from connections, permissions and pending opens as well
 as the event registry. Session disposal schedules every owned connection for
 close. Removing the last device does not dispose the session, manager, workers
-or receivers.
+or receivers. If the USB service is unavailable, enumeration returns an empty
+list and attach handling makes no device visible.
 
 ## Permission replies and open attempts
 
@@ -101,7 +99,7 @@ Permission requests and open attempts have no extra polling, timeout or retry.
 ## Concurrency and close
 
 The session uses a cached worker pool for open, serial reads, permission
-submission, interface/configuration calls, bulk/control transfers and close.
+submission, interface/configuration calls, transfers and close.
 Operations have no per-connection queues or FIFO promise. No worker waits for a
 permission dialog.
 Enumeration, permission checks, descriptor getters and FD/raw reads call JNI on
@@ -121,32 +119,37 @@ holding shared native access. Pending work can be rejected; admitted work must
 return before native close proceeds.
 
 Close sets the volatile `closing` flag under the session monitor before dispatch.
-The close worker waits for exclusive access without holding that monitor, calls
-native close once and clears the reference even if close throws. It releases
-native access before taking the session monitor for bookkeeping and callbacks.
+It wakes waiters for a reservation, and the close worker attempts to cancel
+outstanding requests under shared access. The worker then waits for exclusive
+access without holding the session monitor. It receives available completions,
+calls native close once and clears the connection reference even if close throws.
+Cancellation exceptions are carried into cleanup and reported to waiting close
+callers.
+It releases native access before connection bookkeeping and close callbacks.
 
-If the pool cannot start a close during device removal or session disposal, an
-already-running fallback worker closes the connection. The last native reader
-hands off a deferred close after releasing its lock, so an admitted operation
-can finish without holding up cleanup of other idle connections. During
-disposal the fallback worker accepts these handoffs until all deferred closes
-have been submitted, then finishes the tasks it has accepted.
-An explicit close whose submission fails reports the error to its caller, who
-can retry while the session is active.
+Device removal and session disposal submit closes to the same worker pool.
+Disposal shuts the pool down after submitting its closes, allowing accepted
+tasks to finish. If a submission fails, Java logs the error, resets `closing`
+and leaves the connection tracked with its native handle. An explicit close
+also reports the error to its caller, who can retry while the worker pool
+accepts tasks. A submission failure during removal or disposal can leave that
+native handle open while other accepted closes proceed.
 
 Connection workers briefly take the session monitor while holding shared native
 access for validation. They release native access before delivering callbacks.
 Code holding the session monitor must not wait for the lifetime lock: reversing
 this order could deadlock.
 
-Close does not release interfaces individually, interrupt native calls or wait
-for their Dart callbacks. A native call that does not return can prevent close
-from finishing. Concurrent close callers share the pending result; after that
-attempt finishes, later close calls succeed without replaying its error.
+USBFS releases interface claims when the last reference to the open file is
+closed. A caller-owned duplicate FD can outlive the plugin's connection.
+Admitted calls return from Android before close takes exclusive access. A
+native call that does not return can prevent close from finishing. Concurrent
+close callers share the pending result. Later close calls succeed after that
+attempt finishes.
 
 ## Bulk and control transfers
 
-`_AndroidConnection._transfer()` validates the Dart slice and allocates a Java
+`_prepareTransfer()` validates the Dart slice and allocates a Java
 `byte[]` sized to that slice, or passes null for an absent buffer. Java derives
 the length from that array and passes offset zero to Android. Bulk direction
 comes from the endpoint. Control direction comes from bit 7 of `requestType`.
@@ -163,6 +166,64 @@ The plugin forwards Android timeouts and uses the platform's size rules.
 AOSP limits the bulk length to 16,384 bytes for applications targeting below
 API 28, even when running on newer Android. See the
 [AOSP bulk implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/hardware/usb/UsbDeviceConnection.java#L312).
+
+## Queued bulk and interrupt requests
+
+`UsbRequest` keeps the Dart object and its client data. Each successful binding
+creates one framework request owned by its Java `Connection`. The registry maps
+framework requests by object identity. Its monitor protects registry membership,
+the unreceived count and native receiver reservations. Under shared native
+access, a request monitor protects its active transfer and excludes
+queue/cancel/release transitions. The queue operation checks the connection
+again under this request monitor so cancellation can account for work already
+in flight. Framework `requestWait` runs under shared native access outside
+these monitors.
+
+Java uses `ByteBuffer.wrap` on the same exact-sized staging `byte[]` used by the
+transfer bridge. Android may allocate and copy through a temporary direct
+buffer. Java reads `position()` after completion and retains the array for the
+result. Dart copies the positive IN prefix before delivering the wait future.
+
+Dart registers a token and its destination before JNI submission. A Java
+completion carries that token and the length and bytes from that submission.
+The token survives a new binding on the same Dart object and can be delivered
+before the queue acknowledgement. Java sends `requestDiscarded(token)` for
+rejected or abandoned submissions, including when session disposal has already
+settled a wait callback before the worker can publish its result. A success
+already posted to Dart keeps its destination until Dart handles it. This
+internal event does not depend on listeners to the device streams.
+
+Each native receiver needs a reservation. Java waits on the connection monitor
+when every outstanding transfer is reserved or the queue is empty. Accepted
+submissions, released reservations and connection shutdown notify waiters.
+`timeout: 0` checks for a reservation once and calls `requestWait(0)` once if
+admitted. An indefinite waiter calls Android's unparameterized `requestWait()`
+after admission. A positive timeout uses one monotonic budget across Java
+admission and the single native call. The remaining `long` value goes directly
+to Android, which defines its native timeout behavior. Dart maps timeouts to
+`TimeoutException` and preserves the native `null` result. Android owns transfer
+queueing and the completion stream.
+
+Cancel returns false for an unbound request or a released handle. The plugin
+rejects closing or reinitializing a request with an unreceived
+transfer. This includes a successfully cancelled transfer. Closing an idle
+binding frees the old handle before a new initialization. If the session has
+ended while an idle handle is still present, request close reports `StateError`.
+After `initialize` returns false, the plugin exposes no endpoint for that binding.
+AOSP assigns `mEndpoint` before the native call, so the Java getter can behave differently.
+[AOSP initialization](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/hardware/usb/UsbRequest.java#102)
+
+On connection close, detach or session disposal, Java stops admitting new
+receivers and wakes waiters for reservations. The worker attempts to cancel
+outstanding requests before awaiting exclusive access, so Android can wake the
+native receivers. With exclusive access, the worker receives available leftover
+completions via `requestWait(0)` and discards them to release their Dart
+destinations. If Android leaves requests unreceived, their structures are freed
+only after the native connection closes successfully. The framework's own
+global JNI reference from queue can survive when Android never returns a
+completion. The plugin clears its references and records this case. A completion
+received by a public wait before that cleanup keeps its independent result.
+[AOSP request JNI](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/jni/android_hardware_UsbRequest.cpp#L169-L222)
 
 ## JNI references and errors
 
@@ -181,8 +242,8 @@ The retained JNI references may stay until Dart GC. After Java cleanup they poin
 to inert views: only the device's name, equality and hash remain usable; other
 getters fail through Java `IllegalStateException` translated to `StateError`.
 Native connection close is owned by Java and is independent of JNI finalization.
-Dart never starts automatic USB cleanup; explicit public `close()` calls simply
-await Java's existing completion callback.
+The Dart adapter forwards explicit public `close()` calls and awaits Java's
+completion callback. Java initiates cleanup on detach and session disposal.
 
 `Session.eventDevice()` decides whether a queued JNI event is still deliverable.
 Enumeration marks a lifetime as exposed; an accepted attach delivery does the
@@ -207,9 +268,10 @@ submission. A result kept beyond a callback must retain its own reference before
 the incoming callback argument is released.
 
 `_java` replaces Java argument/state exceptions with Dart `ArgumentError` and
-`StateError`, releasing the replaced throwable. Other Java failures retain their
-details. `Call.finish()` settles a callback once, whether the worker or session
-cleanup wins the race; exceptions never become fabricated false results.
+`StateError`, releasing the replaced throwable. The request wait adapter also
+maps the Java timeout exception. Other Java failures retain their details.
+`Call.finish()` settles a callback once and reports whether it invoked the
+listener without a Java exception. Dart delivery is asynchronous.
 
 ## Engine and Activity lifecycle
 

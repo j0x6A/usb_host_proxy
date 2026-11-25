@@ -67,9 +67,8 @@ deduplication/lifecycle handling. Neither selects a device or interface in the U
    False means no access was obtained; the API does not distinguish refusal from detach.
 4. **Open** requires a selected, authorized device. **Read FD / raw descriptors**
    reads connection information without issuing an extra control transfer.
-   Native code can borrow the file descriptor while the connection is open.
-   The connection owns the descriptor and closes it during cleanup. Callers
-   must coordinate native use with close and detach.
+   The displayed FD is borrowed. Cleanup can close it before native code uses
+   it. See the [FD ownership and queue rules](../lib/src/usb_device_connection.dart).
    Raw bytes are shown as hex (at most 256 displayed bytes, with total length).
 5. Choose an interface descriptor and use **Claim** / **Release**. **Force claim**
    defaults OFF and is passed unchanged; ON does not guarantee success. Selecting
@@ -152,12 +151,12 @@ results; original public device/interface references are passed to the plugin.
 Names are Android list keys. The plugin adds no device UUID. Observed removal
 invalidates saved device/descriptor views and starts connection cleanup. Only
 the old device's name, equality and hash remain usable through its inert Java view;
-reconnecting under the same name does not revive those views. The screen clears
-its selection on detach. While the device remains present, a new enumeration
-does not update fields of previously obtained descriptor views. If Java rejects
-the selected view with `StateError` during a permission check, the screen clears
-that selection even when a newer same-name entry is present. This is UI cleanup
-following Java's decision, not a second USB lifecycle.
+reconnecting under the same name does not revive those views. On a matching
+detach or successful refresh, the screen clears its selection if Java reports
+that the selected view is invalid. Refresh checks this even during an active
+USB operation and when the old detach event was skipped. A live selection keeps
+its original view across refresh and delayed detach. A `StateError` during a
+permission check also clears the selection.
 
 One user operation runs at a time; cleanup also blocks new USB operations until
 it finishes. Discovery and device selection remain available. A pending permission
@@ -207,14 +206,15 @@ passed to Claim/Release, not the active configuration or alternate setting.
 
 ## Tests and verification boundary
 
-Desktop Flutter tests exercise the diagnostic UI, backend routing and request
-placeholders with fakes. Robolectric exercises the Java operations, including
-transfer forwarding and close/detach races. See the
+Desktop Flutter tests exercise the diagnostic UI, non-Android fallbacks and
+Android's isolate checks without native USB access. Robolectric exercises the
+Java operations, including queued requests and close/detach races. See the
 [plugin coverage table](../README.md#tests-and-verification-limits) for details.
 
 Run the desktop tests and analyzer from `example/`:
 
 ```powershell
+flutter pub get
 flutter test --no-pub
 flutter analyze --no-pub
 ```
@@ -235,9 +235,10 @@ try {
 ```
 
 The environment flag includes the Java fixture and Mockito in the debug test
-build. The suite exercises the public connection API through Dart/JNI with
-mocked Android USB objects. Use hardware to verify device responses, actual
-timeouts and physical unplug during I/O.
+build. The suite exercises bulk, control and queued transfers through Dart/JNI
+with mocked Android USB objects. On real USB hardware, verify bulk and interrupt
+requests, cancel followed by receiving the result, and connection close and
+physical unplug with queued requests and no public wait.
 
 On a device, verify grant/refusal, unplug during open/claim/read, reattachment,
 two-device selection changes, interface ownership, native raw descriptors and

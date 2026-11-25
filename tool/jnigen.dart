@@ -26,6 +26,7 @@ Future<void> main(List<String> args) async {
         'android.hardware.usb.UsbEndpoint',
         'java.lang.IllegalStateException',
         'java.lang.IllegalArgumentException',
+        'java.util.concurrent.TimeoutException',
         'dev.jx6A78.usb_host_proxy.UsbHostProxy',
       ],
       sourcePath: [root.resolve('android/src/main/java')],
