@@ -33,9 +33,9 @@ Descriptor getters use Android's existing descriptors. Applications can issue
 additional descriptor requests explicitly through `controlTransfer()`.
 
 - `requestWait()` fails with `UnsupportedError` on Android.
-- `UsbRequest` is a placeholder on every platform: getters return null,
-  initialize/queue/cancel return false, and client-data setters/close do nothing.
-  It does not access buffers or submit native requests.
+- On every platform, `UsbRequest.initialize()`, `queue()` and `cancel()` fail
+  with `UnsupportedError`. Its getters return null, and `setClientData()` and
+  `close()` do nothing.
 - The Windows backend is not implemented. WinUSB methods fail with
   `UnsupportedError` on Android; other platforms retain their placeholders.
 - `UsbAccessory` and Android Parcelable serialization are outside this API.
@@ -72,8 +72,10 @@ final devices = await manager.getDeviceList();
 ```
 
 If permission is needed, call `await manager.requestPermission(device)` from an
-explicit user action. Android may show a dialog; refusal or observed detach
-returns false. Enumeration and opening never request permission implicitly.
+explicit user action. Each call sends a separate request to Android, including
+concurrent calls for the same device. Android decides whether to show a dialog.
+Refusal or observed detach while waiting returns false. Enumeration and opening
+never request permission implicitly.
 Device-class policy can also require application permissions such as CAMERA for
 video devices; the plugin does not request those.
 
@@ -275,13 +277,13 @@ and [Activity launch modes](https://developer.android.com/guide/topics/manifest/
 | Area | Automated checks | Remaining JNI/device verification |
 | --- | --- | --- |
 | Discovery/events | Java tests cover views, name reuse, missing devices, deduplication, Activity intents and lifecycle. | Real list keys, callbacks and USB chooser behavior. |
-| Permissions | Java tests cover coalescing, grant/refusal, old views, late replies, session isolation and errors. | System dialogs, device-class permissions and OEM behavior. |
+| Permissions | Java tests cover independent requests for the same device, out-of-order replies, grant/refusal, old views, late replies, session isolation and errors. | System dialogs, device-class permissions and OEM behavior. |
 | Connections/management | Java tests cover native results/errors, concurrent calls, close exclusion, late opens and cleanup. | Actual kernel/device behavior, settings and resource teardown. |
 | Descriptor getters/equality | Getters read JNI; name/hash survive invalidation. Widget tests use fake descriptors. | JNI values, equality/hash and name/ID conversion. |
 | Resource ownership | Java tests check clearing every saved descriptor view, late child creation, event admission and native close. | Actual JNI finalization and cleanup on a device. |
 | Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
 | Bulk/control transfers | Robolectric checks parameters, results, errors and close/detach. Android integration tests exercise Dart slices, JNI callbacks and worker lifecycle with mocked USB objects. | Transfer behavior, actual timeouts and unplug during I/O on USB hardware. |
-| Request placeholders | Tests check null/false/no-op results without native/buffer access. | Queued requests remain unimplemented. |
+| Queued requests | Tests check `UnsupportedError`, placeholder getters and no-op methods without native or buffer access. | Queued requests remain unimplemented. |
 
 Robolectric runs against API 28, 31, 33 and 35. Desktop Flutter tests use fake
 public interfaces. The Android integration suite runs the Dart adapter,

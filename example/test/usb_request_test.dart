@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:usb_host_proxy/usb_host_proxy.dart';
 
-/// Placeholder contracts only: no JNI, native USB or transport simulation.
+/// Contracts for unsupported queued requests without native USB access.
 void main() {
   test('UsbRequest getters and caller data remain unimplemented', () {
     final request = UsbRequest();
@@ -15,14 +15,20 @@ void main() {
   });
 
   test(
-    'Request placeholders perform no native calls or buffer writes',
+    'Unsupported operations perform no native calls or buffer writes',
     () async {
       final request = UsbRequest();
       final buffer = Uint8List.fromList([9, 128, 255, 8]);
-      expect(await request.initialize(_NoConnection(), _NoEndpoint()), isFalse);
-      expect(await request.queue(buffer, offset: 1, length: 2), isFalse);
+      await expectLater(
+        request.initialize(_NoConnection(), _NoEndpoint()),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        request.queue(buffer, offset: 1, length: 2),
+        throwsUnsupportedError,
+      );
       expect(buffer, [9, 128, 255, 8]);
-      expect(await request.cancel(), isFalse);
+      await expectLater(request.cancel(), throwsUnsupportedError);
       await request.close();
       await request.close();
       expect(request.getEndpoint(), isNull);
@@ -34,11 +40,17 @@ void main() {
     'Unimplemented queue neither validates nor accesses supplied slices',
     () async {
       final request = UsbRequest();
-      expect(await request.queue(null, offset: -1, length: 2), isFalse);
-      expect(await request.queue(Uint8List(0).asUnmodifiableView()), isFalse);
-      expect(
-        await request.queue(Uint8List.fromList([1]).asUnmodifiableView()),
-        isFalse,
+      await expectLater(
+        request.queue(null, offset: -1, length: 2),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        request.queue(Uint8List(0).asUnmodifiableView()),
+        throwsUnsupportedError,
+      );
+      await expectLater(
+        request.queue(Uint8List.fromList([1]).asUnmodifiableView()),
+        throwsUnsupportedError,
       );
     },
   );

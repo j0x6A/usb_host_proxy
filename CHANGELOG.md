@@ -1,3 +1,14 @@
+## 0.3.1
+
+- Submit each Android permission request independently and return Android's
+  decision for that request.
+- Preserve runtime USB attach notifications during Activity reattachment.
+  Keep startup discovery silent and deduplicate Activity intents and broadcasts.
+- Retry native close asynchronously when worker submission fails during detach
+  or session disposal.
+- Report unsupported `UsbRequest` transport operations with `UnsupportedError`.
+- Document how native code can borrow the Android connection's file descriptor.
+
 ## 0.3.0
 
 - Add Android bulk and control transfers on the session worker pool. The adapter

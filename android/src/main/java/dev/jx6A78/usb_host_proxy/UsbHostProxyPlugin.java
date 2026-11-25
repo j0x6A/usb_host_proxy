@@ -69,7 +69,7 @@ public final class UsbHostProxyPlugin
     }
 
     /**
-     * Installs one listener and reads the Activity's current intent as silent initial state.
+     * Installs one listener and reconciles the Activity's stored intent silently.
      * Replaces any previous registration. Both binding and listener identities must match
      * before a callback can enter the session; this is not a second device registry.
      */
@@ -95,7 +95,7 @@ public final class UsbHostProxyPlugin
         detachActivity();
     }
 
-    /** A recreated Activity's saved intent is initial state, not a new USB attach event. */
+    /** Rebinds to the recreated Activity and reconciles its stored intent silently. */
     @Override
     public void onReattachedToActivityForConfigChanges(ActivityPluginBinding activity) {
         onAttachedToActivity(activity);

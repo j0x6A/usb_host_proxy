@@ -55,7 +55,7 @@ initialization/validation failures through their returned futures.
 | `Lifetime` | Immutable Android name/hash, an active flag and weak descriptor-holder registrations. | Ends before removal notification; it retains no USB descriptor after invalidation. |
 | `Configuration`, `Interface`, `Endpoint` | A Java-owned reference to the original Android descriptor, sharing the device lifetime. | Removal/session end clears the reference, even if Dart retains the view. |
 | `Connection` | One native connection; its name matches detach cleanup. | Close/detach/session end permanently blocks new native access. |
-| `Permission` | A PendingIntent and callers awaiting the same device-name decision. | Reply, detach or session end settles callers and cancels the PendingIntent. |
+| `Permission` | The supplied device view, a `PendingIntent` and one pending `Call`. | A reply, submission error, detach or session end cancels the `PendingIntent` and settles the call. |
 | `Call` | A callback that a worker or cleanup may finish, at most once. | The callback is cleared before delivery, so late workers cannot deliver again. |
 
 There is no private device identifier. The `devices` map keeps the latest
@@ -69,20 +69,23 @@ even if Android reuses the same name. Equality/hashing still follow Android's
 name rules and do not authorize access through an invalidated view.
 
 Enumeration checks names from connections, permissions and pending opens as well
-as the event registry. Session disposal closes every owned connection. Removing
-the last device does not dispose the session, manager, workers or receivers.
+as the event registry. Session disposal schedules every owned connection for
+close. Removing the last device does not dispose the session, manager, workers
+or receivers.
 
 ## Permission replies and open attempts
 
-Permission requests for the same name share one decision. Request codes identify
-pending decisions. A unique permission-action UUID separates callback routes
-between sessions; it is not a USB identity. A reply must match the route/request,
-carry the expected name and report access that Android still confirms.
+Each call submits a separate request to Android, even when another request for
+the device is pending or the app already has access. Each request has its own
+request code, `PendingIntent` and callback. The session-specific action and
+request code route a reply to its caller regardless of reply order. For a
+matching reply with the expected device name and an active lifetime, the
+callback returns Android's `EXTRA_PERMISSION_GRANTED` decision.
 
 A pending request cancelled by detach resolves false. Starting another request
 with an invalidated view fails with `StateError`. A decision already completed
-by Java keeps its result even if Dart receives it after removal; the result is
-an observation at completion, not a lease on permission or device presence.
+by Java keeps its result even if Dart receives it after removal. Use
+`hasPermission()` to query current access on a valid device view.
 
 `Call.openingName` is set for a pending open. Detach clears it under the session
 monitor, cancelling that attempt. All saved views of the removed device are also
@@ -93,13 +96,14 @@ reported to the waiting caller and logged, not converted to null.
 
 Session shutdown settles callbacks immediately. An already-running open remains
 responsible for closing its late result, even after its caller receives an error.
-There is no extra polling, timeout or retry.
+Permission requests and open attempts have no extra polling, timeout or retry.
 
 ## Concurrency and close
 
-The session has one cached worker pool and no per-connection queues or FIFO
-promise. Open, serial reads, permission submission, interface/configuration calls,
-bulk/control transfers and close use it. No worker waits for a permission dialog.
+The session uses a cached worker pool for open, serial reads, permission
+submission, interface/configuration calls, bulk/control transfers and close.
+Operations have no per-connection queues or FIFO promise. No worker waits for a
+permission dialog.
 Enumeration, permission checks, descriptor getters and FD/raw reads call JNI on
 the caller's thread.
 
@@ -120,6 +124,15 @@ Close sets the volatile `closing` flag under the session monitor before dispatch
 The close worker waits for exclusive access without holding that monitor, calls
 native close once and clears the reference even if close throws. It releases
 native access before taking the session monitor for bookkeeping and callbacks.
+
+If the pool cannot start a close during device removal or session disposal, an
+already-running fallback worker closes the connection. The last native reader
+hands off a deferred close after releasing its lock, so an admitted operation
+can finish without holding up cleanup of other idle connections. During
+disposal the fallback worker accepts these handoffs until all deferred closes
+have been submitted, then finishes the tasks it has accepted.
+An explicit close whose submission fails reports the error to its caller, who
+can retry while the session is active.
 
 Connection workers briefly take the session monitor while holding shared native
 access for validation. They release native access before delivering callbacks.
@@ -207,7 +220,7 @@ Headless engines retain discovery and broadcast handling without an Activity.
 | Callback/delivery | Effect |
 | --- | --- |
 | Engine attach | Register a session using application context; the session does not retain an Activity. |
-| Initial Activity intent/recreation | Check live presence and consume attach silently; enumerate for initial state. |
+| Stored Activity intent | Check live presence silently. Before the session installs its listener, consume the startup attach. With an installed listener, a later runtime attach remains eligible for delivery. |
 | `onNewIntent()` or USB attach broadcast | Share name-based notification state; notify once until removal. |
 | USB detach | End the device lifetime, cancel pending work and schedule close, then notify if the name was known. Do not ignore detach merely because the name is present again. |
 | Activity detach/configuration change | Remove the exact old listener; preserve session resources. |
