@@ -5,7 +5,9 @@ import 'usb_endpoint.dart';
 
 /// A reusable asynchronous request for a bulk or interrupt endpoint.
 ///
-/// This class currently contains placeholders only; no requests are submitted.
+/// This class currently contains placeholders on every platform; no requests
+/// are submitted. Arguments and buffers are not inspected or retained, and
+/// calling [close] does not change subsequent placeholder results.
 class UsbRequest {
   /// Creates an uninitialized request, matching Android's public constructor.
   UsbRequest();
