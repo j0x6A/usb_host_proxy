@@ -176,6 +176,10 @@ public class UsbHostProxyTest {
         return view(UsbHostProxy.Configuration.class, UsbConfiguration.class, descriptor);
     }
 
+    private UsbHostProxy.Endpoint endpointView(UsbEndpoint descriptor) {
+        return view(UsbHostProxy.Endpoint.class, UsbEndpoint.class, descriptor);
+    }
+
     /** One original framework tree, exposed through both flattened and nested paths. */
     private UsbConfiguration descriptorTree() {
         UsbConfiguration configuration = mock(UsbConfiguration.class);
@@ -1280,6 +1284,158 @@ public class UsbHostProxyTest {
         Result closed = new Result();
         connection.close(closed);
         closed.await();
+        verify(nativeConnection).close();
+    }
+
+    @Test public void bulkForwardsEndpointSliceTimeoutAndNativeResult() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        byte[] slice = {0, 0, 0};
+        when(nativeConnection.bulkTransfer(same(endpoint), same(slice), eq(0), eq(3), eq(350)))
+            .thenAnswer(call -> {
+                byte[] buffer = call.getArgument(1);
+                buffer[0] = (byte) 0x80;
+                buffer[1] = (byte) 0xff;
+                return 2;
+            });
+        Result result = new Result();
+        connection.bulkTransfer(endpointView(endpoint), slice, 350, result);
+        assertNull(result.await().error);
+        assertEquals(2, result.value);
+        assertArrayEquals(new byte[] {(byte) 0x80, (byte) 0xff, 0}, slice);
+        verify(nativeConnection).bulkTransfer(same(endpoint), same(slice), eq(0), eq(3), eq(350));
+    }
+
+    @Test public void controlForwardsSetupPacketOutBytesAndTimeout() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        byte[] slice = {(byte) 0xff, 0x51, 0x42};
+        when(nativeConnection.controlTransfer(eq(0x40), eq(0x33), eq(0x1234), eq(0x4321),
+                same(slice), eq(0), eq(3), eq(29))).thenAnswer(call -> {
+            assertArrayEquals(new byte[] {(byte) 0xff, 0x51, 0x42}, call.getArgument(4));
+            return 1;
+        });
+        Result result = new Result();
+        connection.controlTransfer(0x40, 0x33, 0x1234, 0x4321, slice, 29, result);
+        assertNull(result.await().error);
+        assertEquals(1, result.value);
+        verify(nativeConnection).controlTransfer(0x40, 0x33, 0x1234, 0x4321, slice, 0, 3, 29);
+    }
+
+    @Test public void transfersPreserveNullEmptyNegativeResultsAndAndroidExceptions() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbHostProxy.Endpoint view = endpointView(endpoint);
+        byte[] empty = new byte[0];
+        SecurityException bulkError = new SecurityException("bulk access denied");
+        IllegalArgumentException controlError = new IllegalArgumentException("invalid setup");
+        when(nativeConnection.bulkTransfer(endpoint, null, 0, 0, 0)).thenReturn(-7);
+        when(nativeConnection.bulkTransfer(same(endpoint), same(empty), eq(0), eq(0), eq(13)))
+            .thenThrow(bulkError);
+        when(nativeConnection.controlTransfer(0x40, 1, 2, 3, null, 0, 0, 0)).thenReturn(0);
+        when(nativeConnection.controlTransfer(eq(0xc0), eq(1), eq(2), eq(3), same(empty),
+                eq(0), eq(0), eq(19))).thenThrow(controlError);
+
+        Result bulk = new Result();
+        connection.bulkTransfer(view, null, 0, bulk);
+        assertNull(bulk.await().error);
+        assertEquals(-7, bulk.value);
+        Result control = new Result();
+        connection.controlTransfer(0x40, 1, 2, 3, null, 0, control);
+        assertNull(control.await().error);
+        assertEquals(0, control.value);
+        Result failedBulk = new Result();
+        connection.bulkTransfer(view, empty, 13, failedBulk);
+        assertSame(bulkError, failedBulk.await().error);
+        Result failedControl = new Result();
+        connection.controlTransfer(0xc0, 1, 2, 3, empty, 19, failedControl);
+        assertSame(controlError, failedControl.await().error);
+    }
+
+    @Test public void parallelControlCompletesWhileBulkRunsAndCloseWaitsForBulk() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbEndpoint endpoint = mock(UsbEndpoint.class);
+        UsbHostProxy.Endpoint view = endpointView(endpoint);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        when(nativeConnection.bulkTransfer(endpoint, null, 0, 0, 0)).thenAnswer(call -> {
+            entered.countDown();
+            assertTrue(unblock.await(10, TimeUnit.SECONDS));
+            return 0;
+        });
+        when(nativeConnection.controlTransfer(0x40, 1, 0, 0, null, 0, 0, 51)).thenReturn(-2);
+        Result bulk = new Result();
+        Result closed = new Result();
+        connection.bulkTransfer(view, null, 0, bulk);
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            Result control = new Result();
+            connection.controlTransfer(0x40, 1, 0, 0, null, 51, control);
+            assertEquals(-2, control.await().value);
+            connection.close(closed);
+            Result rejected = new Result();
+            connection.controlTransfer(0x40, 1, 0, 0, null, 51, rejected);
+            assertTrue(rejected.await().error instanceof IllegalStateException);
+            verify(nativeConnection, never()).close();
+        } finally {
+            unblock.countDown();
+        }
+        assertEquals(0, bulk.await().value);
+        assertNull(closed.await().error);
+        verify(nativeConnection).controlTransfer(0x40, 1, 0, 0, null, 0, 0, 51);
+        verify(nativeConnection).close();
+    }
+
+    @Test public void detachRejectsBothUnstartedTransfersAndClosesOnce() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        UsbHostProxy.Endpoint view = endpointView(mock(UsbEndpoint.class));
+        LinkedBlockingQueue<Runnable> tasks = holdWorkers();
+        Result bulk = new Result();
+        Result control = new Result();
+        connection.bulkTransfer(view, null, 0, bulk);
+        connection.controlTransfer(0xc0, 1, 2, 3, null, 31, control);
+        detachDevice();
+        assertThrows(IllegalStateException.class, () -> connection.bulkTransfer(view, null, 0, new Result()));
+        assertEquals(3, tasks.size());
+        while (!tasks.isEmpty()) tasks.remove().run();
+        assertTrue(bulk.await().error instanceof IllegalStateException);
+        assertTrue(control.await().error instanceof IllegalStateException);
+        assertEquals(1, bulk.completions);
+        assertEquals(1, control.completions);
+        verify(nativeConnection).close();
+        verifyNoMoreInteractions(nativeConnection);
+    }
+
+    @Test public void detachLetsAdmittedControlReturnBeforeNativeClose() throws Exception {
+        UsbHostProxy.Connection connection = open();
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch unblock = new CountDownLatch(1);
+        byte[] input = new byte[3];
+        when(nativeConnection.controlTransfer(0xc0, 1, 2, 3, input, 0, 3, 31))
+            .thenAnswer(call -> {
+                entered.countDown();
+                assertTrue(unblock.await(10, TimeUnit.SECONDS));
+                input[0] = 42;
+                return 1;
+            });
+        Result control = new Result();
+        Result close = new Result();
+        connection.controlTransfer(0xc0, 1, 2, 3, input, 31, control);
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+            detachDevice();
+            connection.close(close);
+            Result rejected = new Result();
+            connection.controlTransfer(0xc0, 1, 2, 3, input, 31, rejected);
+            assertTrue(rejected.await().error instanceof IllegalStateException);
+            verify(nativeConnection, never()).close();
+        } finally {
+            unblock.countDown();
+        }
+        assertNull(control.await().error);
+        assertEquals(1, control.value);
+        assertArrayEquals(new byte[] {42, 0, 0}, input);
+        assertNull(close.await().error);
+        verify(nativeConnection).controlTransfer(0xc0, 1, 2, 3, input, 0, 3, 31);
         verify(nativeConnection).close();
     }
 

@@ -2,8 +2,8 @@
 
 Start with the [public usage guide](../README.md). This document explains how an
 operation crosses the Dart/Java boundary and who cleans up its resources.
-The backend implements management/information calls; transport remains outside
-its implemented scope.
+The backend implements management and information calls plus bulk and control
+transfers.
 
 ## Source map
 
@@ -17,27 +17,25 @@ its implemented scope.
 | `android/src/main/java/dev/jx6A78/usb_host_proxy/UsbHostProxyPlugin.java` | Flutter Engine/Activity callbacks and intent-listener registration. |
 | `tool/jnigen.dart` | Regenerates committed private bindings. |
 | `android/src/test/java` | Robolectric backend/plugin tests with mocked USB objects. |
-| `example/lib/main.dart`, `example/test` | Diagnostic screen and fake-backed widget/placeholder tests. |
+| `example/lib/main.dart`, `example/test` | Diagnostic screen and desktop Flutter tests. |
+| `example/integration_test`, `example/android/app/src/jniTest` | Android transfer tests through public Dart APIs and JNI with mocked framework USB objects. |
 
 For a descriptor read, follow `UsbDevice.getProductName()` to `_AndroidDevice`
 and the generated getter to Java `Device.getProductName()`. Java checks the
 shared lifetime, then reads the original Android descriptor. No worker or open
 connection is needed for these getters.
 
-For management, follow `claimInterface()` through `_AndroidConnection`, `_call`,
-Java `Connection.claimInterface()` and `Connection.submit()`.
-The Java entry point resolves the interface view to its live Android descriptor.
-Resolution happens before submission, not inside the worker. A worker calls Android;
-`Completion` delivers the result/error and `_call` completes the Dart Future.
-`openDevice()` has a separate path because a late result may need cleanup before
-it can be given to Dart.
+Connection operations such as `claimInterface()` call Java through `_call`.
+Java resolves descriptor views before `Connection.submit()`. The worker calls
+Android and returns through `Completion`. `openDevice()` has a separate path
+because invalidation can require cleanup of a late result before delivery.
 
 ## Backend routing
 
 `UsbManager` and the static device-name/ID helpers delegate to `UsbBackend`.
 The selector chooses Android or the existing non-Android placeholders. Linux
 and Windows implementations can replace that branch without adding platform
-conditions to public methods; neither backend is implemented by this refactor.
+conditions to public methods.
 Each system adapter owns its resources, while the shared contract has no USB
 registry, lifecycle policy or operation queue.
 
@@ -100,15 +98,16 @@ There is no extra polling, timeout or retry.
 ## Concurrency and close
 
 The session has one cached worker pool and no per-connection queues or FIFO
-promise. Open, serial reads, permission submission, interface/configuration calls
-and close use it. No worker waits for a permission dialog. Enumeration, permission
-checks, descriptor getters and FD/raw reads call JNI on the caller's thread.
+promise. Open, serial reads, permission submission, interface/configuration calls,
+bulk/control transfers and close use it. No worker waits for a permission dialog.
+Enumeration, permission checks, descriptor getters and FD/raw reads call JNI on
+the caller's thread.
 
 Three synchronization boundaries have separate jobs:
 
 1. The `UsbHostProxy` class monitor protects the engine-to-session registry.
 2. The session monitor protects lifecycle state, resource sets, pending callbacks
-   and event bookkeeping. Native management calls run outside it.
+   and event bookkeeping. Worker connection operations run outside it.
 3. A connection's `nativeLifetime` read/write lock prevents native close from
    freeing an object still in use. Ordinary calls take shared read access and may
    run concurrently; close alone needs exclusive write access.
@@ -122,7 +121,7 @@ The close worker waits for exclusive access without holding that monitor, calls
 native close once and clears the reference even if close throws. It releases
 native access before taking the session monitor for bookkeeping and callbacks.
 
-Management workers briefly take the session monitor while holding shared native
+Connection workers briefly take the session monitor while holding shared native
 access for validation. They release native access before delivering callbacks.
 Code holding the session monitor must not wait for the lifetime lock: reversing
 this order could deadlock.
@@ -132,10 +131,25 @@ for their Dart callbacks. A native call that does not return can prevent close
 from finishing. Concurrent close callers share the pending result; after that
 attempt finishes, later close calls succeed without replaying its error.
 
-This protection covers implemented management/information calls only. It does
-not establish a safe close/cancel policy for future transfers or UsbRequest.
-The earlier transport-lifetime investigation must be revisited before restoring
-transport.
+## Bulk and control transfers
+
+`_AndroidConnection._transfer()` validates the Dart slice and allocates a Java
+`byte[]` sized to that slice, or passes null for an absent buffer. Java derives
+the length from that array and passes offset zero to Android. Bulk direction
+comes from the endpoint. Control direction comes from bit 7 of `requestType`.
+The staging array captures OUT data at submission. For IN, Dart copies back
+the positive returned count before resolving the public future. An invalid
+positive IN count beyond the slice is reported as `StateError`.
+
+`Connection.submit()` holds shared native access while Android runs. The Java
+worker retains the staging array even if session shutdown has already failed
+the Dart future and Dart has released its JNI reference. A result already
+completed by Java remains deliverable across detach.
+
+The plugin forwards Android timeouts and uses the platform's size rules.
+AOSP limits the bulk length to 16,384 bytes for applications targeting below
+API 28, even when running on newer Android. See the
+[AOSP bulk implementation](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-16.0.0_r1/core/java/android/hardware/usb/UsbDeviceConnection.java#L312).
 
 ## JNI references and errors
 
@@ -145,7 +159,7 @@ a private holder, weakly registered with its device's `Lifetime`. Removal or
 session disposal clears every live holder, independently of Dart subscribers.
 Views no longer held by Dart can be collected without accumulating until unplug.
 
-Every descriptor getter checks validity in Java before accessing Android. A
+Getters that access framework descriptors check validity in Java. A
 getter already admitted can finish with a local reference after removal. A child
 view created from such a late result registers no descriptor if its lifetime has
 ended. Saved views therefore cannot revive a disconnected device.

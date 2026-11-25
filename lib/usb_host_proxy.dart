@@ -1,8 +1,7 @@
-/// USB Host device discovery, information and management for Android.
+/// USB Host device discovery, management, and bulk and control transfers for Android.
 ///
-/// Android management and device events use JNI. USB transport, [UsbRequest]
-/// and the Windows backend are not implemented; their declarations remain for
-/// future work. Import this library to access the public classes and constants.
+/// Android operations and device events use JNI. Queued [UsbRequest] operations
+/// and the Windows backend remain unimplemented.
 ///
 /// Android USB Host classes and protocol constants are represented without
 /// UsbAccessory. Management workers handle opening, serial reads, interface and
@@ -19,9 +18,8 @@
 /// Java overloads share one Dart method with named optional arguments. Static
 /// UsbDevice name/ID conversions use getDeviceIdFromName/getDeviceNameFromId
 /// because their Android names are already used by instance methods in Dart.
-/// Transport declarations reserve Uint8List slices and transferredLength instead
-/// of Java ByteBuffer position/limit state. They do not currently submit data,
-/// advance buffers or initialize native requests.
+/// Bulk and control transfers run on session workers and operate on Uint8List
+/// slices. An IN transfer copies the received prefix into the caller's view.
 ///
 /// Android Parcelable members (CREATOR, describeContents, writeToParcel and
 /// inherited parcel flags) are not part of this cross-platform API.

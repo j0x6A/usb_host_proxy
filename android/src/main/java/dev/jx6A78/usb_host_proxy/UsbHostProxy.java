@@ -28,7 +28,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * Android backend exposed to Dart through JNIgen, without USB data transport.
+ * Android USB host management, bulk and control transfers exposed to Dart through JNIgen.
  *
  * <p>Framework USB objects remain the source of descriptor data. This class adds
  * engine ownership, permission callbacks, name-based events and native lifetime protection.
@@ -780,7 +780,7 @@ public final class UsbHostProxy {
         }
 
         /**
-         * Dispatches unordered management work through the session's existing pool.
+         * Dispatches connection operations through the session's pool without FIFO ordering.
          * Admission to native access is the final lifecycle check under the shared
          * lifetime lock. Close/detach rejects work that has not passed this check;
          * admitted native calls finish before native close can acquire exclusive access.
@@ -836,6 +836,21 @@ public final class UsbHostProxy {
         public void setConfiguration(Configuration configuration, Completion completion) {
             UsbConfiguration descriptor = configuration.descriptor();
             submit(completion, () -> connection.setConfiguration(descriptor));
+        }
+
+        /** The Java array contains exactly the slice selected by Dart. */
+        public void bulkTransfer(Endpoint endpoint, byte[] buffer, int timeout, Completion completion) {
+            UsbEndpoint descriptor = endpoint.descriptor();
+            submit(completion, () -> connection.bulkTransfer(
+                    descriptor, buffer, 0, buffer == null ? 0 : buffer.length, timeout));
+        }
+
+        /** A null buffer represents a control transfer with no data stage. */
+        public void controlTransfer(int requestType, int request, int value, int index,
+                byte[] buffer, int timeout, Completion completion) {
+            submit(completion, () -> connection.controlTransfer(
+                    requestType, request, value, index, buffer, 0, buffer == null ? 0 : buffer.length,
+                    timeout));
         }
 
         /**

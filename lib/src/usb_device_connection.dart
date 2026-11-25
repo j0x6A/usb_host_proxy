@@ -8,16 +8,16 @@ import 'usb_request.dart';
 
 /// A connection returned by `UsbManager.openDevice`.
 ///
-/// Android implements management and information operations through JNI.
-/// Transport and Windows extensions are not implemented by the Android backend.
+/// Android implements management, information, bulk and control operations
+/// through JNI. Queued requests and Windows pipe extensions are unsupported.
 /// New implemented operations on a closed/detached Android connection fail with
 /// [StateError]. Results already completed by Java are preserved even if their
 /// Dart delivery occurs after detach. Unsupported members always fail with
 /// [UnsupportedError].
 ///
-/// Android management operations run on the session's shared worker pool without
-/// FIFO ordering, including operations on the same connection. Await results
-/// before submitting dependent operations. Interface/configuration arguments
+/// Bulk/control transfers and connection changes use the session's shared
+/// workers without FIFO ordering. Await results before submitting dependent
+/// operations. Interface/configuration arguments
 /// must be Android descriptor adapters. Their native references are forwarded
 /// without checking whether they occur in this device's descriptor tree;
 /// Android decides the result.
@@ -63,10 +63,14 @@ abstract class UsbDeviceConnection {
 
   /// Transfers a slice on a bulk endpoint, in the endpoint's direction.
   ///
-  /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
-  /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
-  /// Currently unsupported on Android: the returned future fails with
-  /// [UnsupportedError] without inspecting the endpoint or buffer.
+  /// [offset] is relative to the supplied view. Omitting [length] selects its
+  /// remainder. A null [buffer] denotes a zero-length transfer at offset zero.
+  /// OUT copies the slice at submission. For IN, a non-empty slice must be
+  /// writable. A positive result writes only that many bytes before completion.
+  /// The result can be shorter than [length]. Zero and negative Android
+  /// results leave the caller's buffer untouched.
+  /// [timeout] is in milliseconds. Zero permits an indefinite wait and can
+  /// delay [close] until Android returns.
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
     Uint8List? buffer, {
@@ -77,10 +81,9 @@ abstract class UsbDeviceConnection {
 
   /// Transfers a data slice using a setup packet on the default control pipe.
   ///
-  /// [offset] is relative to [buffer]; omitted [length] denotes its remainder.
-  /// [timeout] is in milliseconds, with zero denoting an indefinite wait.
-  /// Currently unsupported on Android: the returned future fails with
-  /// [UnsupportedError] without inspecting the arguments or buffer.
+  /// The direction bit in [requestType] selects IN or OUT. [buffer], [offset],
+  /// [length], [timeout] and the returned byte count follow [bulkTransfer].
+  /// Pass null for a setup packet with no data stage.
   Future<int> controlTransfer(
     int requestType,
     int request,
@@ -101,9 +104,10 @@ abstract class UsbDeviceConnection {
 
   /// Closes the connection.
   ///
-  /// Android close is idempotent and waits for admitted native calls, including
-  /// direct file-descriptor and raw-descriptor reads.
-  /// Scheduling it immediately rejects new work on the entire connection.
+  /// Android close is idempotent. Scheduling it rejects work that has not
+  /// passed its final lifecycle check under shared native access.
+  /// Native close waits for admitted calls to return, including transfers and
+  /// direct reads, and can remain pending indefinitely with a zero timeout.
   /// Calls native close once, without separate per-interface release calls;
   /// Android/kernel own resource teardown. Even if native close
   /// throws, this connection is permanently unusable; that error is reported
@@ -112,17 +116,9 @@ abstract class UsbDeviceConnection {
   /// Java initiates device/session cleanup even without Dart listeners. The
   /// retained JNI view can remain until GC after Java clears its native connection;
   /// a detach notification does not mean native close has already finished.
-  /// Close, detach and session end reject work not yet admitted to native access,
-  /// even if it has already been submitted to a worker. Close runs on a session
-  /// worker without FIFO; lifetime protection waits only for admitted native
-  /// calls to return. Those calls may run concurrently and are not forcibly
-  /// interrupted. Callbacks have no completion-order guarantee. JNI finalization
-  /// alone does not close the connection.
-  ///
-  /// Admission is the last lifecycle check while holding shared native access.
-  /// Invalidating pending work prevents native entry; it does not guarantee
-  /// immediate completion of its future. If an admitted native call does not
-  /// return, close cannot finish. No timeout or forced interruption is added.
+  /// Workers check admission when they run. Admitted calls may run concurrently.
+  /// Close neither interrupts their native access nor waits for Dart callback
+  /// delivery. JNI finalization does not close the connection.
   Future<void> close();
 
   // Windows USB pipe extensions. Every method in this group currently fails

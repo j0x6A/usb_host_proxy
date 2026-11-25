@@ -1,7 +1,7 @@
 name: usb_host_proxy_example
 description: Manual Android USB Host diagnostics using the public usb_host_proxy API, without data transfers.
 publish_to: none
-version: 0.2.0
+version: 0.3.0
 
 environment:
   sdk: '>=3.13.5 <4.0.0'
@@ -16,6 +16,9 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
+  jni: ^1.1.0
   flutter_lints: ^6.0.0
 
 flutter:

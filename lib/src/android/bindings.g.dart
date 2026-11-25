@@ -1529,7 +1529,7 @@ final class $IllegalArgumentException$Type$
 
 /// from: `dev.jx6A78.usb_host_proxy.UsbHostProxy`
 ///
-/// Android backend exposed to Dart through JNIgen, without USB data transport.
+/// Android USB host management, bulk and control transfers exposed to Dart through JNIgen.
 ///
 ///Framework USB objects remain the source of descriptor data. This class adds
 ///engine ownership, permission callbacks, name-based events and native lifetime protection.
@@ -1953,6 +1953,131 @@ extension UsbHostProxy$Connection$$Methods on UsbHostProxy$Connection {
       _$$selfRef.pointer,
       _id_setConfiguration.pointer,
       _$configuration.pointer,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_bulkTransfer = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'bulkTransfer',
+        r'(Ldev/jx6A78/usb_host_proxy/UsbHostProxy$Endpoint;[BILdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
+
+  static final _bulkTransfer =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<
+                  (
+                    jni$_.Pointer<jni$_.Void>,
+                    jni$_.Pointer<jni$_.Void>,
+                    jni$_.Int32,
+                    jni$_.Pointer<jni$_.Void>,
+                  )
+                >,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.Pointer<jni$_.Void>,
+              core$_.int,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void bulkTransfer(dev.jx6A78.usb_host_proxy.UsbHostProxy$Endpoint endpoint, byte[] buffer, int timeout, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  ///
+  /// The Java array contains exactly the slice selected by Dart.
+  void bulkTransfer(
+    UsbHostProxy$Endpoint? endpoint,
+    jni$_.JByteArray? buffer,
+    core$_.int timeout,
+    UsbHostProxy$Completion? completion,
+  ) {
+    final _$$selfRef = reference;
+    final _$endpoint = endpoint?.reference ?? jni$_.jNullReference;
+    final _$buffer = buffer?.reference ?? jni$_.jNullReference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _bulkTransfer(
+      _$$selfRef.pointer,
+      _id_bulkTransfer.pointer,
+      _$endpoint.pointer,
+      _$buffer.pointer,
+      timeout,
+      _$completion.pointer,
+    ).check();
+  }
+
+  static final _id_controlTransfer = UsbHostProxy$Connection._class
+      .instanceMethodId(
+        r'controlTransfer',
+        r'(IIII[BILdev/jx6A78/usb_host_proxy/UsbHostProxy$Completion;)V',
+      );
+
+  static final _controlTransfer =
+      jni$_.ProtectedJniExtensions.lookup<
+            jni$_.NativeFunction<
+              jni$_.JThrowablePtr Function(
+                jni$_.Pointer<jni$_.Void>,
+                jni$_.JMethodIDPtr,
+                jni$_.VarArgs<
+                  (
+                    jni$_.Int32,
+                    jni$_.Int32,
+                    jni$_.Int32,
+                    jni$_.Int32,
+                    jni$_.Pointer<jni$_.Void>,
+                    jni$_.Int32,
+                    jni$_.Pointer<jni$_.Void>,
+                  )
+                >,
+              )
+            >
+          >('globalEnv_CallVoidMethod')
+          .asFunction<
+            jni$_.JThrowablePtr Function(
+              jni$_.Pointer<jni$_.Void>,
+              jni$_.JMethodIDPtr,
+              core$_.int,
+              core$_.int,
+              core$_.int,
+              core$_.int,
+              jni$_.Pointer<jni$_.Void>,
+              core$_.int,
+              jni$_.Pointer<jni$_.Void>,
+            )
+          >();
+
+  /// from: `public void controlTransfer(int requestType, int request, int value, int index, byte[] buffer, int timeout, dev.jx6A78.usb_host_proxy.UsbHostProxy$Completion completion)`
+  ///
+  /// A null buffer represents a control transfer with no data stage.
+  void controlTransfer(
+    core$_.int requestType,
+    core$_.int request,
+    core$_.int value,
+    core$_.int index,
+    jni$_.JByteArray? buffer,
+    core$_.int timeout,
+    UsbHostProxy$Completion? completion,
+  ) {
+    final _$$selfRef = reference;
+    final _$buffer = buffer?.reference ?? jni$_.jNullReference;
+    final _$completion = completion?.reference ?? jni$_.jNullReference;
+    _controlTransfer(
+      _$$selfRef.pointer,
+      _id_controlTransfer.pointer,
+      requestType,
+      request,
+      value,
+      index,
+      _$buffer.pointer,
+      timeout,
       _$completion.pointer,
     ).check();
   }

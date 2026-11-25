@@ -6,6 +6,7 @@ import 'package:jni/jni.dart';
 
 import '../usb_backend.dart';
 import '../usb_configuration.dart';
+import '../usb_constants.dart';
 import '../usb_device.dart';
 import '../usb_device_connection.dart';
 import '../usb_endpoint.dart';
@@ -434,7 +435,62 @@ final class _AndroidConnection implements UsbDeviceConnection {
   @override
   Future<void> close() => _call(native.close, (_) {});
 
-  // These existing API members are deliberately outside this implementation.
+  static void _checkJniInt(int value, String name) {
+    RangeError.checkValueInInterval(value, -0x80000000, 0x7fffffff, name);
+  }
+
+  /// The worker owns its Java array until native return, even if the session
+  /// ends earlier. Only a successful IN result is copied into the Dart view.
+  Future<int> _transfer(
+    Uint8List? buffer, {
+    required int offset,
+    required int? length,
+    required bool input,
+    required void Function(JByteArray?, j.UsbHostProxy$Completion) start,
+  }) async {
+    final size = buffer?.length ?? 0;
+    RangeError.checkValueInInterval(offset, 0, size, 'offset');
+    final count = length ?? size - offset;
+    RangeError.checkValueInInterval(count, 0, size - offset, 'length');
+    _checkJniInt(count, 'length');
+
+    if (input && count > 0) {
+      // Uint8List has no writability flag. Check before submitting USB I/O.
+      final target = buffer!;
+      try {
+        target[offset] = target[offset];
+      } on UnsupportedError {
+        throw ArgumentError(
+          'A non-empty USB IN transfer requires a writable buffer',
+        );
+      }
+    }
+
+    final bytes = buffer == null ? null : JByteArray(count);
+    try {
+      if (!input && count > 0) bytes!.setRange(0, count, buffer!, offset);
+      final transferred = await _call(
+        (callback) => start(bytes, callback),
+        (value) => value!.as(JInteger.type).use((n) => n.intValue()),
+      );
+      if (input && transferred > 0) {
+        if (transferred > count) {
+          throw StateError(
+            'Android returned $transferred bytes for a $count-byte USB transfer',
+          );
+        }
+        buffer!.setRange(
+          offset,
+          offset + transferred,
+          bytes!.getRange(0, transferred),
+        );
+      }
+      return transferred;
+    } finally {
+      bytes?.release();
+    }
+  }
+
   @override
   Future<int> bulkTransfer(
     UsbEndpoint endpoint,
@@ -442,7 +498,25 @@ final class _AndroidConnection implements UsbDeviceConnection {
     int offset = 0,
     int? length,
     int timeout = 0,
-  }) async => throw UnsupportedError('USB data transport is not implemented');
+  }) async {
+    if (endpoint is! _AndroidEndpoint) {
+      throw ArgumentError.value(
+        endpoint,
+        'endpoint',
+        'Expected an Android USB endpoint',
+      );
+    }
+    _checkJniInt(timeout, 'timeout');
+    return _transfer(
+      buffer,
+      offset: offset,
+      length: length,
+      input: endpoint.getDirection() == UsbConstants.USB_DIR_IN,
+      start: (bytes, callback) =>
+          native.bulkTransfer(endpoint.native, bytes, timeout, callback),
+    );
+  }
+
   @override
   Future<int> controlTransfer(
     int requestType,
@@ -453,7 +527,30 @@ final class _AndroidConnection implements UsbDeviceConnection {
     int offset = 0,
     int? length,
     int timeout = 0,
-  }) async => throw UnsupportedError('USB data transport is not implemented');
+  }) async {
+    _checkJniInt(requestType, 'requestType');
+    _checkJniInt(request, 'request');
+    _checkJniInt(value, 'value');
+    _checkJniInt(index, 'index');
+    _checkJniInt(timeout, 'timeout');
+    return _transfer(
+      buffer,
+      offset: offset,
+      length: length,
+      input: (requestType & UsbConstants.USB_ENDPOINT_DIR_MASK) != 0,
+      start: (bytes, callback) => native.controlTransfer(
+        requestType,
+        request,
+        value,
+        index,
+        bytes,
+        timeout,
+        callback,
+      ),
+    );
+  }
+
+  // Queued requests and Windows pipe operations are outside this implementation.
   @override
   Future<UsbRequest?> requestWait({int? timeout}) async =>
       throw UnsupportedError('USB request transport is not implemented');

@@ -2,20 +2,19 @@
 
 A Flutter plugin for discovering and managing Android USB Host devices. It can
 read device information, request permission, open connections and manage USB
-interfaces. **It does not transfer application data.**
+interfaces. Open connections support bulk and control transfers.
 
 The Android implementation uses Java and JNI. JNI lets Dart call Android classes;
 JNIgen generates the private bindings for those calls. Dart objects retain
 references to Java views of Android USB objects rather than copying descriptor
 fields. Java owns USB validity and cleanup; Dart forwards calls and events.
 
-Version 0.2.0 is in development. The package is not configured for publication
+The package is not configured for publication
 to pub.dev (`publish_to: none`). License: [BSD-3-Clause](LICENSE).
 
 ## What works
 
-All management and information operations declared by this package's Android
-Host API have implementations:
+The Android backend implements the following operations.
 
 | Task | Public API |
 | --- | --- |
@@ -24,16 +23,16 @@ Host API have implementations:
 | Check/request access | `hasPermission()`, `requestPermission()` |
 | Open/close connections | `openDevice()`, `UsbDeviceConnection.close()` |
 | Manage interfaces and settings | `claimInterface()`, `releaseInterface()`, `setInterface()`, `setConfiguration()` |
+| Transfer data | `UsbDeviceConnection.bulkTransfer()`, `UsbDeviceConnection.controlTransfer()` |
 | Read connection information | `getFileDescriptor()`, `getRawDescriptors()`, `getSerial()` |
 | Read device serial or convert Android names/IDs | `getSerialNumber()`, `getDeviceIdFromName()`, `getDeviceNameFromId()` |
 | Receive device events | `deviceAttached`, `deviceDetached` streams |
 
 This is the implemented scope, not a claim of complete hardware or test coverage.
-Descriptor access covers Android's USB classes and the raw bytes returned by
-Android; additional descriptor requests through control transfers are not implemented.
+Descriptor getters use Android's existing descriptors. Applications can issue
+additional descriptor requests explicitly through `controlTransfer()`.
 
-- `bulkTransfer()`, `controlTransfer()` and `requestWait()` fail with
-  `UnsupportedError` on Android.
+- `requestWait()` fails with `UnsupportedError` on Android.
 - `UsbRequest` is a placeholder on every platform: getters return null,
   initialize/queue/cancel return false, and client-data setters/close do nothing.
   It does not access buffers or submit native requests.
@@ -163,18 +162,26 @@ descriptor reference occurs in the connection's descriptor tree. Arguments must
 still be Android adapters so their native references can be passed through JNI.
 `force` is forwarded unchanged and does not guarantee a successful Claim.
 
-Management calls may run concurrently, even on the same connection. They have
-**no guaranteed submission order (FIFO)**. Await a result before submitting an
-operation that depends on it. Enumeration, permission checks, descriptor getters
-and FD/raw reads still call JNI synchronously; a Future signature does not itself
-move work off the isolate.
+Bulk and control transfers take `offset` relative to the supplied `Uint8List`
+view. Omitting `length` selects the rest of that view. A null buffer requires
+offset and length zero and can be used for a control request without a data
+stage. OUT copies the selected data at submission. IN requires a writable
+buffer for a non-empty slice and updates only the received prefix. Positive
+results can be short. Zero and negative results pass through unchanged.
+Android handles the transfer timeout and size limits. See
+[Android UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection).
+
+Management calls and transfers may run concurrently, even on the same connection.
+Worker operations have **no guaranteed submission order (FIFO)**. Await
+operations that other calls depend on. Enumeration, permission checks,
+descriptor getters and FD/raw reads call JNI synchronously.
 
 `close()` immediately rejects new connection operations and prevents pending
 work from starting native access. It waits only for calls already allowed to
 start, including direct information reads, then calls native close once without
 individual Release calls. It does not drain older worker tasks or wait for their
-Dart callback delivery. A native call that does not return can prevent close from
-finishing; there is no extra timeout or forced interruption.
+Dart callback delivery. A transfer admitted with `timeout: 0` can therefore keep
+`close()` pending indefinitely if the device stops responding.
 
 Repeated close is safe. Even if native close fails, that connection cannot be
 reused; the failure reaches callers awaiting that attempt and is not replayed to
@@ -273,19 +280,14 @@ and [Activity launch modes](https://developer.android.com/guide/topics/manifest/
 | Descriptor getters/equality | Getters read JNI; name/hash survive invalidation. Widget tests use fake descriptors. | JNI values, equality/hash and name/ID conversion. |
 | Resource ownership | Java tests check clearing every saved descriptor view, late child creation, event admission and native close. | Actual JNI finalization and cleanup on a device. |
 | Diagnostic UI | Widget tests cover selection, cleanup, late results, fixed layout, log colors/history/scrolling and Clear. | Physical-device interaction. |
-| Request placeholders | Tests check null/false/no-op results without native/buffer access. | Transport is not implemented or verified. |
+| Bulk/control transfers | Robolectric checks parameters, results, errors and close/detach. Android integration tests exercise Dart slices, JNI callbacks and worker lifecycle with mocked USB objects. | Transfer behavior, actual timeouts and unplug during I/O on USB hardware. |
+| Request placeholders | Tests check null/false/no-op results without native/buffer access. | Queued requests remain unimplemented. |
 
-Robolectric tests run against API 28, 31, 33 and 35 with mocked USB objects.
-Widget tests use fake public interfaces. Neither suite executes Dart-to-JNI USB
-integration. There is no full branch/API-coverage measurement or automated
-physical-device suite; passing tests do not establish complete hardware support
-or JNI ownership/error-conversion correctness.
-
-In particular, automated tests do not exercise every descriptor getter through
-JNI, the real permission dialog, native name/ID conversion or physical unplug
-during a native call. The Java tests inspect cleared framework references, not
-the JVM's actual JNI finalization. These are verification gaps, not additional
-implemented features. Use the example's manual checklist on Android hardware.
+Robolectric runs against API 28, 31, 33 and 35. Desktop Flutter tests use fake
+public interfaces. The Android integration suite runs the Dart adapter,
+generated bindings and production Java workers, with the framework USB objects
+substituted at the test boundary. The example includes a manual checklist for
+physical hardware.
 
 With dependencies and tooling already installed, run:
 
@@ -301,8 +303,9 @@ flutter analyze --no-pub
 .\gradlew.bat :usb_host_proxy:testDebugUnitTest --offline --console=plain --no-daemon
 ```
 
-The Java task compiles library/test code, not an example APK. Offline mode needs
-cached dependencies. Manual hardware scenarios are in the [example README](example/README.md).
+The Java task needs cached dependencies in offline mode. See the
+[example README](example/README.md#dartjni-transfer-tests) for the Android
+integration command and [hardware scenarios](example/README.md).
 
 ## Working on the plugin
 

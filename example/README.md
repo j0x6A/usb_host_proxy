@@ -2,8 +2,9 @@
 
 Manual USB Host diagnostics for a physical Android device running API 28
 (Android 9) or later with USB Host/OTG support.
-Application ID: `dev.jx6A78.usb_host_proxy`. There are no data transfers and
-no Windows implementation.
+Application ID: `dev.jx6A78.usb_host_proxy`. The diagnostic screen covers USB
+management. The separate Android integration suite exercises bulk and control
+transfers through the library.
 
 `minSdk` is explicitly 28; `compileSdk` and `targetSdk` follow the installed
 Flutter SDK through the app's Gradle configuration. This example does not impose
@@ -204,66 +205,37 @@ passed to Claim/Release, not the active configuration or alternate setting.
 
 ## Tests and verification boundary
 
-`test/widget_test.dart` injects a fake `UsbManager` into `UsbDiagnosticsApp`.
-It covers automatic/manual/event discovery, empty state, permission decisions,
-descriptor display, open/null/errors, claim/release results, selection cleanup,
-out-of-order results, same-name replacement after detach and screen disposal,
-None/Force behavior, repeated Claim/Release, all five console color categories
-and unlimited console history, unconditional scrolling, Clear and disposal.
-Layout tests compare section types, positions, dimensions and scroll-position
-identity across USB states, long data, pending operations and descriptor errors.
-They also check independent panel offsets after offscreen destruction/recreation,
-lazy console rows with complete history and scrolling after multiline log bursts.
-Color tests include exception text resembling a USB/success message to ensure
-text content never determines the category.
-Tests use controlled futures and never access real USB/JNI. They do not establish
-hardware correctness. Java unit tests check native result/error forwarding,
-descriptor forwarding, parallel execution and lifecycle independently of the UI.
-Those Java tests cover invalidation of saved views after detach, name-based permission coalescing,
-session-isolated replies and cleanup of opens invalidated by detach/restart,
-including rejection of stale views after reconnection. No device UUID is involved.
-Management tests use the JNI-facing Java methods and check that descriptor
-resolution still happens before worker dispatch. `test/usb_backend_test.dart`
-checks non-Android routing, unchanged placeholders, session-free adapter creation
-and asynchronous root-isolate rejection without loading JNI on the test host.
-They also check device/connection serial values and errors, native FD/raw
-descriptor results, rejection after close and permission submission failures.
-Blocked direct FD/raw reads verify that native close waits for their return
-while later reads are rejected. This does not add any operation to the UI.
-This does not cover JNI conversion or native USB behavior. Library features
-without screen controls require a separate caller for manual verification.
-Java tests also inspect all saved descriptor holders after removal/session end,
-exercise late child creation and event admission, and sequence proxy operations
-by awaiting their results. The former Dart lifecycle helper tests are removed
-with that implementation; lifecycle now belongs to Java.
-`test/usb_request_test.dart` separately checks the withdrawn transport's public
-UsbRequest placeholders: null/false/no-op results, no native calls and no buffer
-reads or writes. It does not test a working transport implementation.
+Desktop Flutter tests exercise the diagnostic UI, backend routing and request
+placeholders with fakes. Robolectric exercises the Java operations, including
+transfer forwarding and close/detach races. See the
+[plugin coverage table](../README.md#tests-and-verification-limits) for details.
 
-With dependencies and Android tooling already available, run from `example/`:
+Run the desktop tests and analyzer from `example/`:
 
 ```powershell
 flutter test --no-pub
 flutter analyze --no-pub
 ```
 
-Run the Java suite from `example/android/`:
+### Dart/JNI transfer tests
+
+With an Android API 28+ emulator or device connected, run from `example/`.
+Replace `emulator-5554` with the device ID from `flutter devices`.
 
 ```powershell
-.\gradlew.bat :usb_host_proxy:testDebugUnitTest --offline --console=plain --no-daemon
+flutter pub get
+$env:USB_HOST_PROXY_JNI_TEST = 'true'
+try {
+    flutter test --no-pub -d emulator-5554 integration_test/usb_transfer_test.dart
+} finally {
+    Remove-Item Env:USB_HOST_PROXY_JNI_TEST
+}
 ```
 
-The Java task compiles test/library code and writes reports under
-`example/build/usb_host_proxy/`; it does not build/install an example APK.
-Offline mode requires dependencies to be cached. Run `flutter analyze --no-pub`
-from the repository root as well to include the plugin sources and generation tool.
-
-The example pins KGP tooling in `android/settings.gradle.kts` with `apply false`:
-this overrides AGP's older transitive dependency for Flutter's version check,
-not the Java source language. Existing `android.newDsl=false` and
-`android.builtInKotlin=false` are transitional compatibility settings; their
-deprecation warnings do not establish a test failure and require a separate
-toolchain migration before a future AGP upgrade.
+The environment flag includes the Java fixture and Mockito in the debug test
+build. The suite exercises the public connection API through Dart/JNI with
+mocked Android USB objects. Use hardware to verify device responses, actual
+timeouts and physical unplug during I/O.
 
 On a device, verify grant/refusal, unplug during open/claim/read, reattachment,
 two-device selection changes, interface ownership, native raw descriptors and
